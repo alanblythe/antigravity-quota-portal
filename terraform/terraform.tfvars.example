@@ -1,0 +1,22 @@
+# Sample Terraform variable configuration
+project_id            = "my-gcp-project-id"
+region                = "us-east5"
+bigquery_dataset_name = "antigravity_inference_logs"
+enabled_group_email   = "antigravity-enabled@yourcompany.com"
+disabled_group_email  = "antigravity-disabled@yourcompany.com"
+app_timezone          = "America/Los_Angeles"
+default_quota_usd     = 10.00
+default_overage_usd   = 2.00
+image_tag             = "latest"
+
+# External Application Load Balancer & IAP Configuration
+# Phase 1: Set enable_lb = false to reserve static IP and get sslip.io redirect URI.
+# Phase 2: Create OAuth Client in Google Cloud Console, set credentials and enable_lb = true.
+enable_lb               = false
+domain_override         = "" # Leave empty to use sslip.io magic DNS
+iap_oauth_client_id     = ""
+iap_oauth_client_secret = ""
+iap_allowed_members     = [
+  "domain:yourcompany.com",
+  # "user:admin@yourcompany.com"
+]

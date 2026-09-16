@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Antigravity Quota & Usage Management Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <!-- React & Material UI Local Assets -->
+  <script src="/vendor/react.production.min.js"></script>
+  <script src="/vendor/react-dom.production.min.js"></script>
+  <script src="/vendor/emotion-react.umd.min.js"></script>
+  <script src="/vendor/emotion-styled.umd.min.js"></script>
+  <script src="/vendor/material-ui.production.min.js"></script>
+  <script src="/vendor/babel.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; font-family: 'Google Sans', 'Roboto', sans-serif; background-color: #f8f9fa; }
+    .mono { font-family: monospace; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const {
+      AppBar, Toolbar, Typography, Container, Box, Paper, Grid, Card, CardContent,
+      Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TableSortLabel,
+      Chip, Button, IconButton, TextField, InputAdornment, LinearProgress, Avatar,
+      Drawer, Dialog, DialogTitle, DialogContent, DialogActions, FormControlLabel,
+      Switch, RadioGroup, Radio, FormControl, FormLabel, Divider, Snackbar, Alert,
+      CircularProgress, Tooltip, Menu, MenuItem, ThemeProvider, createTheme, CssBaseline
+    } = MaterialUI;
+
+    const theme = createTheme({
+      palette: {
+        primary: { main: '#1a73e8', light: '#e8f0fe', dark: '#1557b0' },
+        secondary: { main: '#188038', light: '#e6f4ea' },
+        warning: { main: '#f9ab00', light: '#fef7e0' },
+        error: { main: '#d93025', light: '#fce8e6' },
+        background: { default: '#f8f9fa', paper: '#ffffff' },
+        text: { primary: '#202124', secondary: '#5f6368' },
+        divider: '#dadce0',
+      },
+      typography: { fontFamily: '"Google Sans", "Roboto", sans-serif' },
+    });
+
+    function App() {
+      const [users, setUsers] = React.useState([]);
+      const [config, setConfig] = React.useState(null);
+      const [pricing, setPricing] = React.useState({});
+      const [kpis, setKPIs] = React.useState(null);
+      const [loading, setLoading] = React.useState(true);
+      const [syncing, setSyncing] = React.useState(false);
+      const [search, setSearch] = React.useState('');
+      const [statusFilter, setStatusFilter] = React.useState('ALL');
+      const [selectedUser, setSelectedUser] = React.useState(null);
+      const [drawerOpen, setDrawerOpen] = React.useState(false);
+      const [settingsOpen, setSettingsOpen] = React.useState(false);
+      const [pricingOpen, setPricingOpen] = React.useState(false);
+      const [auditOpen, setAuditOpen] = React.useState(false);
+      const [addUserOpen, setAddUserOpen] = React.useState(false);
+      const [auditEvents, setAuditEvents] = React.useState([]);
+      const [snackbar, setSnackbar] = React.useState({ open: false, message: '', severity: 'info' });
+
+      // Load Data
+      const loadData = async () => {
+        try {
+          const [uRes, cRes, pRes, kRes] = await Promise.all([
+            fetch('/api/users').then(r => r.json()),
+            fetch('/api/config').then(r => r.json()),
+            fetch('/api/config/pricing').then(r => r.json()),
+            fetch('/api/evaluator/kpis').then(r => r.json()),
+          ]);
+          setUsers(uRes);
+          setConfig(cRes);
+          setPricing(pRes);
+          setKPIs(kRes);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      React.useEffect(() => { loadData(); }, []);
+
+      const handlePublishSync = async () => {
+        setSyncing(true);
+        try {
+          const res = await fetch('/api/evaluator/publish', { method: 'POST' }).then(r => r.json());
+          if (res.success) {
+            setSnackbar({ open: true, message: `Publish complete: ${res.users_evaluated} developers evaluated, ${res.group_swaps_count} group updates applied.`, severity: 'success' });
+            await loadData();
+          } else {
+            setSnackbar({ open: true, message: res.error || 'Evaluation failed', severity: 'error' });
+          }
+        } catch (e) {
+          setSnackbar({ open: true, message: 'Sync failed to connect to API', severity: 'error' });
+        } finally {
+          setSyncing(false);
+        }
+      };
+
+      const handleSaveUser = async (email, payload) => {
+        try {
+          const res = await fetch(`/api/users/${encodeURIComponent(email)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).then(r => r.json());
+          setUsers(prev => prev.map(u => u.email === res.email ? res : u));
+          setSelectedUser(res);
+          const newKPIs = await fetch('/api/evaluator/kpis').then(r => r.json());
+          setKPIs(newKPIs);
+          setSnackbar({ open: true, message: `Draft saved for ${email}. Click Publish & Sync to apply.`, severity: 'info' });
+        } catch (e) {
+          setSnackbar({ open: true, message: 'Failed to update user', severity: 'error' });
+        }
+      };
+
+      const handleToggleLock = async (email) => {
+        try {
+          const res = await fetch(`/api/users/${encodeURIComponent(email)}/lock`, { method: 'POST' }).then(r => r.json());
+          setUsers(prev => prev.map(u => u.email === res.email ? res : u));
+          const newKPIs = await fetch('/api/evaluator/kpis').then(r => r.json());
+          setKPIs(newKPIs);
+          setSnackbar({ open: true, message: `Updated access status for ${email}`, severity: 'success' });
+        } catch (e) {
+          setSnackbar({ open: true, message: 'Failed to toggle lock', severity: 'error' });
+        }
+      };
+
+      const handleSaveConfig = async (newConfig) => {
+        try {
+          const res = await fetch('/api/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newConfig),
+          }).then(r => r.json());
+          setConfig(res);
+          setSettingsOpen(false);
+          setSnackbar({ open: true, message: 'Settings saved successfully', severity: 'success' });
+        } catch (e) {
+          setSnackbar({ open: true, message: 'Failed to save settings', severity: 'error' });
+        }
+      };
+
+      const handleSavePricing = async (newPricing) => {
+        try {
+          const res = await fetch('/api/config/pricing', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newPricing),
+          }).then(r => r.json());
+          setPricing(res);
+          setPricingOpen(false);
+          setSnackbar({ open: true, message: 'Pricing matrix updated successfully', severity: 'success' });
+        } catch (e) {
+          setSnackbar({ open: true, message: 'Failed to update pricing matrix', severity: 'error' });
+        }
+      };
+
+      const filteredUsers = users.filter(u => {
+        if (!u.email.toLowerCase().includes(search.toLowerCase())) return false;
+        if (statusFilter === 'ALL') return true;
+        if (statusFilter === 'EXEMPT') return u.is_exempt;
+        if (statusFilter === 'LOCKED') return u.status === 'MANUALLY_DISABLED';
+        if (statusFilter === 'THROTTLED') return u.status === 'AUTO_DISABLED';
+        if (statusFilter === 'WARNING') return u.status === 'ACTIVE' && !u.is_exempt && u.current_week.credit_utilization_percentage >= 80;
+        if (statusFilter === 'ACTIVE') return u.status === 'ACTIVE' && !u.is_exempt && u.current_week.credit_utilization_percentage < 80;
+        return true;
+      });
+
+      return (
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          <Box sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+            {/* Top Bar */}
+            <AppBar position="sticky" elevation={0} sx={{ bgcolor: '#ffffff', borderBottom: '1px solid #dadce0' }}>
+              <Toolbar sx={{ justifyContent: 'space-between', px: 3 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Box sx={{ width: 36, height: 36, borderRadius: 1.5, bgcolor: '#1a73e8', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700 }}>
+                    AG
+                  </Box>
+                  <Box>
+                    <Typography variant="h6" sx={{ color: '#202124', fontWeight: 700, fontSize: 17, lineHeight: 1.2 }}>
+                      Antigravity Quota Portal
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: '#5f6368' }}>
+                      Enterprise AI Developer Access Governance
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Button size="small" onClick={() => {
+                    fetch('/api/audit?limit=50').then(r => r.json()).then(setAuditEvents);
+                    setAuditOpen(true);
+                  }}>Audit Trail</Button>
+                  <Button size="small" onClick={() => setPricingOpen(true)}>Pricing Matrix</Button>
+                  <Button size="small" onClick={() => setSettingsOpen(true)}>Settings</Button>
+                  <Button
+                    variant="contained"
+                    size="medium"
+                    onClick={handlePublishSync}
+                    disabled={syncing}
+                    sx={{ bgcolor: '#188038', '&:hover': { bgcolor: '#137333' }, fontWeight: 600, ml: 1 }}
+                  >
+                    {syncing ? 'Syncing...' : 'Publish & Sync'}
+                  </Button>
+                </Box>
+              </Toolbar>
+            </AppBar>
+
+            <Container maxWidth="xl" sx={{ py: 3, flexGrow: 1 }}>
+              {/* Disclaimer */}
+              <Paper elevation={0} sx={{ p: 1.5, mb: 3, display: 'flex', alignItems: 'center', gap: 1.5, bgcolor: '#e8f0fe', border: '1px solid #d2e3fc', borderRadius: 2 }}>
+                <Typography variant="body2" sx={{ color: '#174ea6', fontWeight: 500 }}>
+                  <strong>Estimation Notice:</strong> All token breakdown percentages, gross spend figures, credit balances, and net cost metrics displayed in this portal are estimated projections calculated from token usage logs and model pricing configurations.
+                </Typography>
+              </Paper>
+
+              {/* KPI Chips */}
+              <Grid container spacing={2} sx={{ mb: 3 }}>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>ACTIVE DEVELOPERS</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>{kpis?.active_developers || 0}</Typography>
+                      <Typography variant="caption" sx={{ color: '#188038' }}>{kpis?.exempt_developers || 0} Exempt</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>AUTO-THROTTLED</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#d93025' }}>{kpis?.auto_throttled_developers || 0}</Typography>
+                      <Typography variant="caption" sx={{ color: '#70757a' }}>{kpis?.manually_locked_developers || 0} Locked</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>TOKENS THIS WEEK</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#1a73e8' }}>
+                        {kpis ? (kpis.total_tokens_this_week / 1000000).toFixed(1) + 'M' : '0M'}
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: '#70757a' }}>{kpis?.week_id}</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>GROSS USAGE</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5 }}>${kpis?.total_gross_usage_usd.toFixed(2) || '0.00'}</Typography>
+                      <Typography variant="caption" sx={{ color: '#70757a' }}>Estimated Spend</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>CREDITS ALLOCATED</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#1a73e8' }}>${kpis?.total_credits_allocated_usd.toFixed(2) || '0.00'}</Typography>
+                      <Typography variant="caption" sx={{ color: '#70757a' }}>Total Granted</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+                <Grid item xs={12} sm={4} md={2}>
+                  <Card elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2 }}>
+                    <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>NET OVERAGES</Typography>
+                      <Typography variant="h5" sx={{ fontWeight: 700, mt: 0.5, color: '#d93025' }}>${kpis?.total_net_overages_usd.toFixed(2) || '0.00'}</Typography>
+                      <Typography variant="caption" sx={{ color: '#70757a' }}>Above Allocated Quota</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              </Grid>
+
+              {/* Table Paper */}
+              <Paper elevation={0} sx={{ border: '1px solid #dadce0', borderRadius: 2, overflow: 'hidden' }}>
+                <Box sx={{ p: 2, display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', bgcolor: '#fafbfc', borderBottom: '1px solid #dadce0' }}>
+                  <TextField
+                    size="small"
+                    placeholder="Search developer email..."
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    sx={{ width: 320 }}
+                  />
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    {['ALL', 'ACTIVE', 'WARNING', 'THROTTLED', 'LOCKED', 'EXEMPT'].map(st => (
+                      <Chip
+                        key={st}
+                        label={st}
+                        clickable
+                        color={statusFilter === st ? 'primary' : 'default'}
+                        variant={statusFilter === st ? 'filled' : 'outlined'}
+                        size="small"
+                        onClick={() => setStatusFilter(st)}
+                      />
+                    ))}
+                    <Button variant="contained" size="small" onClick={() => setAddUserOpen(true)}>Add Developer</Button>
+                  </Box>
+                </Box>
+
+                <TableContainer>
+                  <Table size="medium">
+                    <TableHead sx={{ bgcolor: '#f1f3f4' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600 }}>Developer</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Status</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Weekly Tokens</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Gross Usage</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Credits</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Balance / Overage</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 160 }}>Credit Utilization</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 600 }}>Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {filteredUsers.map(user => {
+                        const util = user.current_week.credit_utilization_percentage;
+                        const isOver = user.current_week.net_billable_cost_usd > 0;
+                        const utilColor = util > 100 ? '#d93025' : util >= 80 ? '#f9ab00' : '#188038';
+
+                        return (
+                          <TableRow
+                            key={user.email}
+                            hover
+                            onClick={() => { setSelectedUser(user); setDrawerOpen(true); }}
+                            sx={{ cursor: 'pointer' }}
+                          >
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                                <Avatar sx={{ bgcolor: '#1a73e8', width: 32, height: 32, fontSize: 13 }}>
+                                  {user.email.charAt(0).toUpperCase()}
+                                </Avatar>
+                                <Box>
+                                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{user.email}</Typography>
+                                  {user.has_custom_quota && (
+                                    <Typography variant="caption" sx={{ color: '#1a73e8' }}>Custom Quota</Typography>
+                                  )}
+                                </Box>
+                              </Box>
+                            </TableCell>
+
+                            <TableCell>
+                              {user.is_exempt ? (
+                                <Chip label="Exempt" size="small" sx={{ bgcolor: '#f3e8fd', color: '#7b1fa2', fontWeight: 600 }} />
+                              ) : user.status === 'MANUALLY_DISABLED' ? (
+                                <Chip label="Locked" size="small" sx={{ bgcolor: '#f1f3f4', color: '#5f6368', fontWeight: 600 }} />
+                              ) : user.status === 'AUTO_DISABLED' ? (
+                                <Chip label="Auto-Throttled" size="small" sx={{ bgcolor: '#fce8e6', color: '#d93025', fontWeight: 600 }} />
+                              ) : util >= 80 ? (
+                                <Chip label="Warning (>80%)" size="small" sx={{ bgcolor: '#fef7e0', color: '#b06000', fontWeight: 600 }} />
+                              ) : (
+                                <Chip label="Active" size="small" sx={{ bgcolor: '#e6f4ea', color: '#188038', fontWeight: 600 }} />
+                              )}
+                            </TableCell>
+
+                            <TableCell align="right" className="mono">
+                              {user.current_week.total_tokens.toLocaleString()}
+                            </TableCell>
+
+                            <TableCell align="right" sx={{ fontWeight: 600 }}>
+                              ${user.current_week.gross_spend_usd.toFixed(2)}
+                            </TableCell>
+
+                            <TableCell align="right" sx={{ color: '#5f6368' }}>
+                              ${user.current_week.quota_credits_usd.toFixed(2)}
+                            </TableCell>
+
+                            <TableCell align="right">
+                              {isOver ? (
+                                <Typography variant="body2" sx={{ fontWeight: 700, color: '#d93025' }}>
+                                  +${user.current_week.net_billable_cost_usd.toFixed(2)} Overage
+                                </Typography>
+                              ) : (
+                                <Typography variant="body2" sx={{ fontWeight: 600, color: '#188038' }}>
+                                  ${user.current_week.remaining_credit_usd.toFixed(2)} Left
+                                </Typography>
+                              )}
+                            </TableCell>
+
+                            <TableCell>
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <LinearProgress
+                                  variant="determinate"
+                                  value={Math.min(100, util)}
+                                  sx={{
+                                    flexGrow: 1,
+                                    height: 8,
+                                    borderRadius: 4,
+                                    bgcolor: '#e8eaed',
+                                    '& .MuiLinearProgress-bar': { bgcolor: utilColor }
+                                  }}
+                                />
+                                <Typography variant="caption" sx={{ fontWeight: 700, color: utilColor, width: 38 }}>
+                                  {util.toFixed(0)}%
+                                </Typography>
+                              </Box>
+                            </TableCell>
+
+                            <TableCell align="center" onClick={e => e.stopPropagation()}>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  if (user.status === 'AUTO_DISABLED') {
+                                    setSelectedUser(user);
+                                    setDrawerOpen(true);
+                                  } else {
+                                    handleToggleLock(user.email);
+                                  }
+                                }}
+                                sx={{
+                                  color: user.status === 'MANUALLY_DISABLED'
+                                    ? '#188038'
+                                    : user.status === 'AUTO_DISABLED'
+                                    ? '#1a73e8'
+                                    : '#d93025',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {user.status === 'MANUALLY_DISABLED'
+                                  ? 'Unlock'
+                                  : user.status === 'AUTO_DISABLED'
+                                  ? 'Manage'
+                                  : 'Lock'}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </Paper>
+            </Container>
+
+            {/* Slide-out Drawer */}
+            {selectedUser && (
+              <Drawer
+                anchor="right"
+                open={drawerOpen}
+                onClose={() => setDrawerOpen(false)}
+                PaperProps={{ sx: { width: { xs: '100%', sm: 480 }, p: 3 } }}
+              >
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Typography variant="h6">{selectedUser.email}</Typography>
+                  <Button onClick={() => setDrawerOpen(false)}>Close</Button>
+                </Box>
+                <Divider sx={{ mb: 2 }} />
+
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Financial Ledger</Typography>
+                <Grid container spacing={1.5} sx={{ mb: 3 }}>
+                  <Grid item xs={6}>
+                    <Paper elevation={0} sx={{ p: 1.5, border: '1px solid #dadce0' }}>
+                      <Typography variant="caption">Gross Spend</Typography>
+                      <Typography variant="h6">${selectedUser.current_week.gross_spend_usd.toFixed(2)}</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Paper elevation={0} sx={{ p: 1.5, border: '1px solid #dadce0' }}>
+                      <Typography variant="caption">Allocated Credits</Typography>
+                      <Typography variant="h6" sx={{ color: '#1a73e8' }}>${selectedUser.current_week.quota_credits_usd.toFixed(2)}</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Paper elevation={0} sx={{ p: 1.5, border: '1px solid #dadce0' }}>
+                      <Typography variant="caption">Remaining Balance</Typography>
+                      <Typography variant="h6" sx={{ color: '#188038' }}>${selectedUser.current_week.remaining_credit_usd.toFixed(2)}</Typography>
+                    </Paper>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Paper elevation={0} sx={{ p: 1.5, border: '1px solid #dadce0' }}>
+                      <Typography variant="caption">Net Overage</Typography>
+                      <Typography variant="h6" sx={{ color: '#d93025' }}>${selectedUser.current_week.net_billable_cost_usd.toFixed(2)}</Typography>
+                    </Paper>
+                  </Grid>
+                </Grid>
+
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Model Token Breakdown</Typography>
+                <Paper elevation={0} sx={{ p: 2, mb: 3, border: '1px solid #dadce0' }}>
+                  {Object.entries(selectedUser.current_week.tokens_by_model).map(([model, tokens]) => (
+                    <Box key={model} sx={{ mb: 1.5, '&:last-child': { mb: 0 } }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                        <Typography variant="body2">{model}</Typography>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }}>{tokens.toLocaleString()} tokens</Typography>
+                      </Box>
+                    </Box>
+                  ))}
+                </Paper>
+
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>Quota Controls</Typography>
+                <Paper elevation={0} sx={{ p: 2, border: '1px solid #dadce0' }}>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={selectedUser.has_custom_quota}
+                        onChange={e => handleSaveUser(selectedUser.email, { has_custom_quota: e.target.checked })}
+                      />
+                    }
+                    label="Enable Custom Quota"
+                  />
+                  {selectedUser.has_custom_quota && (
+                    <Box sx={{ mt: 1.5, display: 'flex', gap: 1 }}>
+                      <TextField
+                        size="small"
+                        label="Quota ($)"
+                        defaultValue={selectedUser.custom_quota_usd || 10}
+                        onBlur={e => handleSaveUser(selectedUser.email, { custom_quota_usd: parseFloat(e.target.value) })}
+                      />
+                      <TextField
+                        size="small"
+                        label="Overage ($)"
+                        defaultValue={selectedUser.custom_overage_usd || 2}
+                        onBlur={e => handleSaveUser(selectedUser.email, { custom_overage_usd: parseFloat(e.target.value) })}
+                      />
+                    </Box>
+                  )}
+                  <Divider sx={{ my: 1.5 }} />
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={selectedUser.is_exempt}
+                        onChange={e => handleSaveUser(selectedUser.email, { is_exempt: e.target.checked })}
+                        color="secondary"
+                      />
+                    }
+                    label="Exempt from Quota Throttling"
+                  />
+                </Paper>
+              </Drawer>
+            )}
+
+            {/* Modals */}
+            {/* Audit Modal */}
+            <Dialog open={auditOpen} onClose={() => setAuditOpen(false)} maxWidth="lg" fullWidth>
+              <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 700 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  Audit & Governance Event Trail
+                </Box>
+                <Button size="small" onClick={() => fetch('/api/audit?limit=100').then(r => r.json()).then(setAuditEvents)}>
+                  Refresh
+                </Button>
+              </DialogTitle>
+              <DialogContent dividers>
+                <TableContainer component={Paper} elevation={0} sx={{ border: '1px solid #dadce0', maxHeight: 460 }}>
+                  <Table stickyHeader size="small">
+                    <TableHead sx={{ bgcolor: '#f1f3f4' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600, width: 170 }}>Timestamp (UTC)</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 160 }}>Action</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 220 }}>Target Developer</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 140 }}>Triggered By</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>Details</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {auditEvents.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} align="center" sx={{ py: 3, color: '#5f6368' }}>
+                            No audit events recorded yet.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        auditEvents.map(e => {
+                          const actionColor = e.action.includes('SWAP') || e.action.includes('LOCK') ? '#d93025' : e.action.includes('PUBLISH') ? '#188038' : '#1a73e8';
+                          return (
+                            <TableRow key={e.event_id} hover>
+                              <TableCell className="mono" sx={{ fontSize: 12 }}>{new Date(e.timestamp).toISOString().replace('T', ' ').slice(0, 19)}</TableCell>
+                              <TableCell>
+                                <Chip
+                                  label={e.action}
+                                  size="small"
+                                  sx={{ fontWeight: 600, fontSize: 11, color: actionColor, bgcolor: `${actionColor}15` }}
+                                />
+                              </TableCell>
+                              <TableCell sx={{ fontWeight: 500 }}>{e.target_user || '-'}</TableCell>
+                              <TableCell sx={{ color: '#5f6368' }}>{e.triggered_by}</TableCell>
+                              <TableCell className="mono" sx={{ fontSize: 11, color: '#3c4043' }}>
+                                {JSON.stringify(e.details)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </DialogContent>
+              <DialogActions><Button onClick={() => setAuditOpen(false)}>Close</Button></DialogActions>
+            </Dialog>
+
+            {/* Pricing Modal */}
+            <Dialog open={pricingOpen} onClose={() => setPricingOpen(false)} maxWidth="md" fullWidth>
+              <DialogTitle sx={{ fontWeight: 700 }}>Token Pricing & Hinge Point Matrix</DialogTitle>
+              <DialogContent dividers>
+                <Typography variant="body2" sx={{ color: '#5f6368', mb: 2 }}>
+                  Configure rates per 1M tokens and estimated input/output/cached ratios used to calculate developer spend from Cloud Logging audit events.
+                </Typography>
+                <TableContainer component={Paper} elevation={0} sx={{ border: '1px solid #dadce0' }}>
+                  <Table size="small">
+                    <TableHead sx={{ bgcolor: '#f1f3f4' }}>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600 }}>Model Name</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 600 }}>Input / 1M ($)</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 600 }}>Output / 1M ($)</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 600 }}>Cached / 1M ($)</TableCell>
+                        <TableCell align="center" sx={{ fontWeight: 600 }}>Hinge Ratios (In/Out/Cache)</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>Blended / 1M</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {Object.entries(pricing || {}).map(([key, model]) => {
+                        const blended = (
+                          model.estimated_input_ratio * model.input_price_per_million +
+                          model.estimated_output_ratio * model.output_price_per_million +
+                          model.estimated_cached_ratio * model.cached_price_per_million
+                        ).toFixed(4);
+                        return (
+                          <TableRow key={key}>
+                            <TableCell>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>{model.display_name}</Typography>
+                              <Typography variant="caption" sx={{ color: '#5f6368', fontFamily: 'monospace' }}>Pattern: {model.log_pattern}</Typography>
+                            </TableCell>
+                            <TableCell align="center">
+                              <TextField
+                                size="small"
+                                type="number"
+                                value={model.input_price_per_million}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setPricing(prev => ({ ...prev, [key]: { ...prev[key], input_price_per_million: val } }));
+                                }}
+                                sx={{ width: 85 }}
+                                inputProps={{ step: 0.01, min: 0 }}
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              <TextField
+                                size="small"
+                                type="number"
+                                value={model.output_price_per_million}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setPricing(prev => ({ ...prev, [key]: { ...prev[key], output_price_per_million: val } }));
+                                }}
+                                sx={{ width: 85 }}
+                                inputProps={{ step: 0.01, min: 0 }}
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              <TextField
+                                size="small"
+                                type="number"
+                                value={model.cached_price_per_million}
+                                onChange={e => {
+                                  const val = parseFloat(e.target.value) || 0;
+                                  setPricing(prev => ({ ...prev, [key]: { ...prev[key], cached_price_per_million: val } }));
+                                }}
+                                sx={{ width: 85 }}
+                                inputProps={{ step: 0.005, min: 0 }}
+                              />
+                            </TableCell>
+                            <TableCell align="center">
+                              <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                                {(model.estimated_input_ratio * 100).toFixed(0)}% / {(model.estimated_output_ratio * 100).toFixed(0)}% / {(model.estimated_cached_ratio * 100).toFixed(0)}%
+                              </Typography>
+                            </TableCell>
+                            <TableCell align="right">
+                              <Typography variant="body2" sx={{ fontWeight: 700, color: '#1a73e8' }}>
+                                ${blended}
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              </DialogContent>
+              <DialogActions sx={{ px: 3, py: 2 }}>
+                <Button onClick={() => setPricingOpen(false)}>Cancel</Button>
+                <Button variant="contained" onClick={() => handleSavePricing(pricing)} sx={{ bgcolor: '#1a73e8' }}>
+                  Save Pricing Matrix
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Settings Modal */}
+            <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} maxWidth="sm" fullWidth>
+              <DialogTitle sx={{ fontWeight: 700 }}>Portal & Governance Settings</DialogTitle>
+              <DialogContent dividers>
+                {config && (
+                  <Grid container spacing={2.5}>
+                    <Grid item xs={12}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>
+                        TIMEZONE & BUDGET BOUNDARY
+                      </Typography>
+                      <TextField
+                        select
+                        fullWidth
+                        size="small"
+                        label="Application Timezone (Monday 00:00 Reset)"
+                        value={config.timezone || 'America/Los_Angeles'}
+                        onChange={e => setConfig(prev => ({ ...prev, timezone: e.target.value }))}
+                        sx={{ mt: 1 }}
+                      >
+                        {['America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York', 'UTC', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo'].map(tz => (
+                          <MenuItem key={tz} value={tz}>{tz}</MenuItem>
+                        ))}
+                      </TextField>
+                    </Grid>
+                    <Grid item xs={12}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>
+                        GOOGLE CLOUD IDENTITY GROUPS
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Active Developers Group Email"
+                        value={config.enabled_group || ''}
+                        onChange={e => setConfig(prev => ({ ...prev, enabled_group: e.target.value }))}
+                        helperText="Bound to roles/businessaicode.user in GCP IAM"
+                        sx={{ mt: 1, mb: 1.5 }}
+                      />
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Throttled / Disabled Developers Group Email"
+                        value={config.disabled_group || ''}
+                        onChange={e => setConfig(prev => ({ ...prev, disabled_group: e.target.value }))}
+                        helperText="Zero GCP IAM permissions. Holds paused developers."
+                      />
+                    </Grid>
+                    <Grid item xs={12}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>
+                        DEFAULT BUDGET CREDITS & OVERAGES
+                      </Typography>
+                      <Grid container spacing={2} sx={{ mt: 0.2 }}>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Default Weekly Quota ($)"
+                            type="number"
+                            value={config.default_quota_usd || 10}
+                            onChange={e => setConfig(prev => ({ ...prev, default_quota_usd: parseFloat(e.target.value) || 0 }))}
+                          />
+                        </Grid>
+                        <Grid item xs={6}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            label="Default Overage Buffer ($)"
+                            type="number"
+                            value={config.default_overage_usd || 2}
+                            onChange={e => setConfig(prev => ({ ...prev, default_overage_usd: parseFloat(e.target.value) || 0 }))}
+                          />
+                        </Grid>
+                      </Grid>
+                    </Grid>
+                    <Grid item xs={12}>
+                      <Typography variant="caption" sx={{ color: '#5f6368', fontWeight: 600 }}>
+                        INTEGRATIONS & WEBHOOKS
+                      </Typography>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label="Alert Webhook URL"
+                        value={config.webhook_alert_url || ''}
+                        onChange={e => setConfig(prev => ({ ...prev, webhook_alert_url: e.target.value }))}
+                        placeholder="https://chat.googleapis.com/v1/spaces/..."
+                        sx={{ mt: 1 }}
+                      />
+                    </Grid>
+                  </Grid>
+                )}
+              </DialogContent>
+              <DialogActions sx={{ px: 3, py: 2 }}>
+                <Button onClick={() => setSettingsOpen(false)}>Cancel</Button>
+                <Button variant="contained" onClick={() => handleSaveConfig(config)} sx={{ bgcolor: '#1a73e8' }}>
+                  Save Settings
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Snackbar */}
+            <Snackbar
+              open={snackbar.open}
+              autoHideDuration={5000}
+              onClose={() => setSnackbar(prev => ({ ...prev, open: false }))}
+              anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+            >
+              <Alert severity={snackbar.severity} variant="filled">{snackbar.message}</Alert>
+            </Snackbar>
+          </Box>
+        </ThemeProvider>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

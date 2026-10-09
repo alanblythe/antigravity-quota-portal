@@ -55,6 +55,12 @@ variable "domain_override" {
   default     = ""
 }
 
+variable "customer_id" {
+  type        = string
+  description = "Cloud Identity / Workspace Customer Directory ID"
+  default     = ""
+}
+
 variable "iap_oauth_client_id" {
   type        = string
   description = "OAuth 2.0 Client ID for Identity-Aware Proxy (IAP)"
@@ -78,4 +84,16 @@ variable "iap_allowed_members" {
   type        = list(string)
   description = "List of members (e.g. domain:example.com, user:foo@example.com) granted roles/iap.httpsResourceAccessor on the web backend service."
   default     = []
+}
+
+variable "initial_developer_emails" {
+  type        = list(string)
+  description = "Initial list of developer emails to add to the enabled group"
+  default     = ["dev1@example.com", "dev2@example.com"]
+}
+
+variable "monitored_project_ids" {
+  type        = list(string)
+  description = "List of GCP workload project IDs where developers run Antigravity inference"
+  default     = ["my-workload-project"]
 }

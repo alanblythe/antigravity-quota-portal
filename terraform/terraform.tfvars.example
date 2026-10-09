@@ -1,5 +1,6 @@
 # Sample Terraform variable configuration
-project_id            = "my-gcp-project-id"
+project_id            = "your-portal-host-project"
+monitored_project_ids = ["your-workload-project"]
 region                = "us-east5"
 bigquery_dataset_name = "antigravity_inference_logs"
 enabled_group_email   = "antigravity-enabled@yourcompany.com"

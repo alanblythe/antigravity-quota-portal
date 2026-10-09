@@ -1,7 +1,9 @@
-"""Pytest test fixtures."""
-
+import os
 import pytest
 from starlette.testclient import TestClient
+
+# Ensure test suite runs with mock services regardless of local .env
+os.environ["USE_MOCK_SERVICES"] = "true"
 
 from app.api.deps import get_audit_emitter, get_bq, get_db, get_evaluator, get_identity
 from app.audit import MockAuditEmitter

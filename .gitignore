@@ -40,7 +40,10 @@ htmlcov/
 
 # Environment Variables & Keys
 .env
-.env.local
+.env.*
+!.env.example
+.envrc
+!.envrc.example
 
 # IDE
 .idea/

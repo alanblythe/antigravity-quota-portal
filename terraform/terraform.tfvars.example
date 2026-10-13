@@ -1,0 +1,37 @@
+# Sample Terraform variable configuration
+project_id            = "your-portal-host-project"
+monitored_project_ids = ["your-workload-project"]
+region                = "us-east5"
+bigquery_dataset_name = "antigravity_inference_logs"
+enabled_group_email   = "antigravity-enabled@yourcompany.com"
+disabled_group_email  = "antigravity-disabled@yourcompany.com"
+app_timezone          = "America/Los_Angeles"
+default_quota_usd        = 10.00
+default_overage_usd      = 2.00
+preset_quotas            = "[10.0, 15.0, 25.0, 50.0, 100.0]"
+scheduler_interval_hours = 1
+cors_origins              = "*"
+webhook_alert_url         = null
+image_tag                 = "latest"
+enable_gcp_audit_logging  = true
+gcp_audit_log_name        = "antigravity-quota-audit"
+model_pricing_config_path = "config/model_pricing.json"
+
+# External Application Load Balancer & sslip.io / IAP Configuration
+# By default, enable_lb = true provisions the External Application Load Balancer with
+# an automatic sslip.io magic-DNS certificate. Set enable_lb = false to disable all
+# external LB/IP resources for internal-only Cloud Run deployments.
+# IMPORTANT: When enable_lb = true, iap_oauth_client_id and iap_oauth_client_secret are
+# required by default to protect the portal with Identity-Aware Proxy (IAP), unless
+# allow_unauthenticated_lb = true is explicitly set.
+enable_lb                = true
+allow_unauthenticated_lb = false
+domain_override          = "" # Leave empty to use sslip.io magic DNS
+# NOTE: Replace the placeholder OAuth Client ID and Secret below with real credentials
+# from Google Cloud Console -> APIs & Services -> Credentials before running `tofu apply`.
+iap_oauth_client_id      = "your-iap-client-id.apps.googleusercontent.com"
+iap_oauth_client_secret  = "your-iap-client-secret"
+iap_allowed_members      = [
+  "domain:yourcompany.com",
+  # "user:admin@yourcompany.com"
+]

@@ -1,0 +1,143 @@
+{
+  "_comment": "Public model pricing rate card (USD per 1M tokens) from https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+  "models": {
+    "gemini-3-pro": {
+      "display_name": "Gemini 3.1 Pro / 3.0 Pro",
+      "log_pattern": "%3-pro%",
+      "input_price_per_million": 2.00,
+      "output_price_per_million": 12.00,
+      "cached_price_per_million": 0.20,
+      "context_tier_threshold_tokens": 200000,
+      "input_price_gt_threshold_per_million": 4.00,
+      "output_price_gt_threshold_per_million": 18.00,
+      "cached_price_gt_threshold_per_million": 0.40,
+      "estimated_input_ratio": 0.70,
+      "estimated_output_ratio": 0.20,
+      "estimated_cached_ratio": 0.10
+    },
+    "gemini-3.8-flash": {
+      "display_name": "Gemini 3.8 Flash",
+      "log_pattern": "%3.8%flash%",
+      "input_price_per_million": 0.75,
+      "output_price_per_million": 3.75,
+      "cached_price_per_million": 0.075,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3.7-flash": {
+      "display_name": "Gemini 3.7 Flash",
+      "log_pattern": "%3.7%flash%",
+      "input_price_per_million": 0.75,
+      "output_price_per_million": 3.75,
+      "cached_price_per_million": 0.075,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3.6-flash": {
+      "display_name": "Gemini 3.6 Flash",
+      "log_pattern": "%3.6%flash%",
+      "input_price_per_million": 0.75,
+      "output_price_per_million": 3.75,
+      "cached_price_per_million": 0.075,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3.5-flash-lite": {
+      "display_name": "Gemini 3.5 Flash-Lite",
+      "log_pattern": "%3.5%flash%lite%",
+      "input_price_per_million": 0.30,
+      "output_price_per_million": 2.50,
+      "cached_price_per_million": 0.03,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3.5-flash": {
+      "display_name": "Gemini 3.5 Flash",
+      "log_pattern": "%3.5%flash%",
+      "input_price_per_million": 1.50,
+      "output_price_per_million": 9.00,
+      "cached_price_per_million": 0.15,
+      "estimated_input_ratio": 0.75,
+      "estimated_output_ratio": 0.20,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3.1-flash-lite": {
+      "display_name": "Gemini 3.1 Flash-Lite",
+      "log_pattern": "%3.1%flash%lite%",
+      "input_price_per_million": 0.25,
+      "output_price_per_million": 1.50,
+      "cached_price_per_million": 0.025,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-3-flash": {
+      "display_name": "Gemini 3 Flash",
+      "log_pattern": "%3-flash%",
+      "input_price_per_million": 0.50,
+      "output_price_per_million": 3.00,
+      "cached_price_per_million": 0.05,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "gemini-2.5-pro": {
+      "display_name": "Gemini 2.5 Pro",
+      "log_pattern": "%2.5%pro%",
+      "input_price_per_million": 1.25,
+      "output_price_per_million": 10.00,
+      "cached_price_per_million": 0.125,
+      "context_tier_threshold_tokens": 200000,
+      "input_price_gt_threshold_per_million": 2.50,
+      "output_price_gt_threshold_per_million": 15.00,
+      "cached_price_gt_threshold_per_million": 0.25,
+      "estimated_input_ratio": 0.70,
+      "estimated_output_ratio": 0.20,
+      "estimated_cached_ratio": 0.10
+    },
+    "gemini-2.5-flash": {
+      "display_name": "Gemini 2.5 Flash",
+      "log_pattern": "%2.5%flash%",
+      "input_price_per_million": 0.30,
+      "output_price_per_million": 2.50,
+      "cached_price_per_million": 0.03,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    },
+    "claude-opus-5.5": {
+      "display_name": "Claude Opus 5.5",
+      "log_pattern": "%opus%5.5%",
+      "input_price_per_million": 4.00,
+      "output_price_per_million": 20.00,
+      "cached_price_per_million": 0.20,
+      "estimated_input_ratio": 0.75,
+      "estimated_output_ratio": 0.20,
+      "estimated_cached_ratio": 0.05
+    },
+    "claude-sonnet-5.5": {
+      "display_name": "Claude Sonnet 5.5",
+      "log_pattern": "%sonnet%5.5%",
+      "input_price_per_million": 2.00,
+      "output_price_per_million": 10.00,
+      "cached_price_per_million": 0.10,
+      "estimated_input_ratio": 0.75,
+      "estimated_output_ratio": 0.20,
+      "estimated_cached_ratio": 0.05
+    },
+    "default_fallback": {
+      "display_name": "Default Model Fallback",
+      "log_pattern": "default",
+      "input_price_per_million": 0.75,
+      "output_price_per_million": 3.75,
+      "cached_price_per_million": 0.075,
+      "estimated_input_ratio": 0.80,
+      "estimated_output_ratio": 0.15,
+      "estimated_cached_ratio": 0.05
+    }
+  }
+}

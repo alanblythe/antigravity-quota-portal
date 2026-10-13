@@ -1,0 +1,45 @@
+# Version control & local virtual environments
+.git
+.gitignore
+.venv
+venv/
+env/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Ephemeral scratch & local state
+.scratch
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov/
+
+# Python bytecode & build artifacts
+**/__pycache__
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Node / Frontend build dependencies
+**/node_modules
+frontend/dist
+
+# Terraform state, provider binaries & local plans
+terraform/
+terraform/.terraform
+terraform/.terraform.lock.hcl
+terraform/*.tfstate*
+terraform/*.tfvars
+terraform/tfplan
+
+# Non-runtime directories & documentation
+tests/
+scripts/
+docs/
+.vscode/
+*.md

@@ -1,0 +1,5 @@
+# direnv integration template
+# Copy to .envrc: cp .envrc.example .envrc && direnv allow
+
+# Automatically load environment variables from .env if present
+dotenv_if_exists .env

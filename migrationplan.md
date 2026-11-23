@@ -81,7 +81,7 @@ By contrast, the Terraform resource `google_logging_project_sink.antigravity_sin
     @fallback_project_id
   ) AS project_id
   ```
-* **No DDL schema changes are required** on existing BigQuery tables because `resource.labels.project_id` and `logName` are standard top-level Cloud Logging export columns, and `TO_JSON_STRING(jsonpayload_v1_metadatalog.metadata)` dynamically extracts `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, and `thoughtsTokenCount` without failing if a sub-field is absent in older log entries.
+* **No DDL schema changes are required** on existing BigQuery tables because `resource.labels.project_id` and `logName` are standard top-level Cloud Logging export columns, and `TO_JSON_STRING(jsonpayload_v1_metadatalog)` dynamically extracts `apiRequest` (`apirequest` / `api_request`) and fallback `.metadata` token counts (`totalTokenCount` plus optional `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, and `thoughtsTokenCount`) without failing if a sub-struct or sub-field is absent.
 
 ---
 

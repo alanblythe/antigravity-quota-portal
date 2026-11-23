@@ -171,7 +171,8 @@ def calculate_model_spend(
         eff_input_tokens = 0
         eff_output_tokens = 0
         eff_cached_tokens = 0
-        rem_fallback = token_count if fallback_tokens is None else _safe_non_neg_int(fallback_tokens)
+        parsed_fallback = _safe_non_neg_int(fallback_tokens) if fallback_tokens is not None else 0
+        rem_fallback = parsed_fallback if parsed_fallback > 0 else token_count
 
     w_in = _finite_non_neg(pricing.estimated_input_ratio)
     w_out = _finite_non_neg(pricing.estimated_output_ratio)

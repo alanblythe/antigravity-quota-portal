@@ -8,7 +8,7 @@ Verifies a deployed (or local) Antigravity Quota Portal environment across all 4
 2. Live BigQuery Multi-Day Sharded (`_YYYYMMDD`) & Partitioned Table Seeding:
    - Ensures today's shard, yesterday's shard, an expired (-10d) shard, and the partitioned
      `businessaicode_googleapis_com_metadata` table exist with the canonical Cloud Logging sink schema
-     (`jsonpayload_v1_metadatalog.metadata`).
+     (`jsonpayload_v1_metadatalog.apirequest`).
    - Inserts synthetic rows for a 3-user cohort (`dev1` breach, `dev2` healthy, `admin` exempt) via
      standard BigQuery DML `INSERT INTO` (avoiding streaming buffer locks), including cross-table
      duplicate `insertId`, `NULL` `insertId`, empty `''` `insertId`, and an out-of-window `-10d` shard.
@@ -83,16 +83,15 @@ METADATA_TABLE_SCHEMA = [
         mode="NULLABLE",
         fields=[
             bigquery.SchemaField(
-                "metadata",
+                "apirequest",
                 "RECORD",
                 mode="NULLABLE",
                 fields=[
-                    bigquery.SchemaField("totalTokenCount", "INT64", mode="NULLABLE"),
-                    bigquery.SchemaField("promptTokenCount", "INT64", mode="NULLABLE"),
-                    bigquery.SchemaField("candidatesTokenCount", "INT64", mode="NULLABLE"),
-                    bigquery.SchemaField("cachedContentTokenCount", "INT64", mode="NULLABLE"),
-                    bigquery.SchemaField("thoughtsTokenCount", "INT64", mode="NULLABLE"),
-                    bigquery.SchemaField("truncated", "BOOL", mode="NULLABLE"),
+                    bigquery.SchemaField("totaltokencount", "INT64", mode="NULLABLE"),
+                    bigquery.SchemaField("prompttokencount", "INT64", mode="NULLABLE"),
+                    bigquery.SchemaField("candidatestokencount", "INT64", mode="NULLABLE"),
+                    bigquery.SchemaField("cachedcontenttokencount", "INT64", mode="NULLABLE"),
+                    bigquery.SchemaField("thoughtstokencount", "INT64", mode="NULLABLE"),
                 ],
             )
         ],
@@ -180,13 +179,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_user AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            500000 AS totalTokenCount,
-            400000 AS promptTokenCount,
-            80000 AS candidatesTokenCount,
-            100000 AS cachedContentTokenCount,
-            20000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            500000 AS totaltokencount,
+            400000 AS prompttokencount,
+            80000 AS candidatestokencount,
+            100000 AS cachedcontenttokencount,
+            20000 AS thoughtstokencount
+        ) AS apirequest)
     ),
     (
         @ts_dup,
@@ -195,13 +193,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_admin AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            2000000 AS totalTokenCount,
-            1600000 AS promptTokenCount,
-            320000 AS candidatesTokenCount,
-            400000 AS cachedContentTokenCount,
-            80000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            2000000 AS totaltokencount,
+            1600000 AS prompttokencount,
+            320000 AS candidatestokencount,
+            400000 AS cachedcontenttokencount,
+            80000 AS thoughtstokencount
+        ) AS apirequest)
     )
     """
 
@@ -220,13 +217,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_user AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            500000 AS totalTokenCount,
-            400000 AS promptTokenCount,
-            80000 AS candidatesTokenCount,
-            100000 AS cachedContentTokenCount,
-            20000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            500000 AS totaltokencount,
+            400000 AS prompttokencount,
+            80000 AS candidatestokencount,
+            100000 AS cachedcontenttokencount,
+            20000 AS thoughtstokencount
+        ) AS apirequest)
     ),
     (
         @ts_yesterday,
@@ -235,13 +231,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_dev2 AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            500000 AS totalTokenCount,
-            400000 AS promptTokenCount,
-            80000 AS candidatesTokenCount,
-            100000 AS cachedContentTokenCount,
-            20000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            500000 AS totaltokencount,
+            400000 AS prompttokencount,
+            80000 AS candidatestokencount,
+            100000 AS cachedcontenttokencount,
+            20000 AS thoughtstokencount
+        ) AS apirequest)
     )
     """
 
@@ -258,13 +253,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_user AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            9000000 AS totalTokenCount,
-            7200000 AS promptTokenCount,
-            1800000 AS candidatesTokenCount,
-            0 AS cachedContentTokenCount,
-            0 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            9000000 AS totaltokencount,
+            7200000 AS prompttokencount,
+            1800000 AS candidatestokencount,
+            0 AS cachedcontenttokencount,
+            0 AS thoughtstokencount
+        ) AS apirequest)
     )
     """
 
@@ -284,13 +278,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_user AS user_id, 'gemini-4-argon' AS model),
         STRUCT(STRUCT(
-            500000 AS totalTokenCount,
-            400000 AS promptTokenCount,
-            80000 AS candidatesTokenCount,
-            100000 AS cachedContentTokenCount,
-            20000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            500000 AS totaltokencount,
+            400000 AS prompttokencount,
+            80000 AS candidatestokencount,
+            100000 AS cachedcontenttokencount,
+            20000 AS thoughtstokencount
+        ) AS apirequest)
     ),
     (
         @ts_empty,
@@ -299,13 +292,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_user AS user_id, 'gemini-3.1-pro' AS model),
         STRUCT(STRUCT(
-            1500000 AS totalTokenCount,
-            1000000 AS promptTokenCount,
-            500000 AS candidatesTokenCount,
-            0 AS cachedContentTokenCount,
-            0 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            1500000 AS totaltokencount,
+            1000000 AS prompttokencount,
+            500000 AS candidatestokencount,
+            0 AS cachedcontenttokencount,
+            0 AS thoughtstokencount
+        ) AS apirequest)
     ),
     (
         @ts_empty,
@@ -314,13 +306,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_dev2 AS user_id, 'gemini-3.8-flash' AS model),
         STRUCT(STRUCT(
-            2000000 AS totalTokenCount,
-            1600000 AS promptTokenCount,
-            300000 AS candidatesTokenCount,
-            200000 AS cachedContentTokenCount,
-            100000 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            2000000 AS totaltokencount,
+            1600000 AS prompttokencount,
+            300000 AS candidatestokencount,
+            200000 AS cachedcontenttokencount,
+            100000 AS thoughtstokencount
+        ) AS apirequest)
     ),
     (
         @ts_empty,
@@ -329,13 +320,12 @@ def seed_synthetic_bq_rows(
         STRUCT('businessaicode.googleapis.com/BAICInstance' AS type, STRUCT(@workload_project AS project_id) AS labels),
         STRUCT(@tagged_admin AS user_id, 'gemini-3.1-pro' AS model),
         STRUCT(STRUCT(
-            3000000 AS totalTokenCount,
-            2000000 AS promptTokenCount,
-            1000000 AS candidatesTokenCount,
-            0 AS cachedContentTokenCount,
-            0 AS thoughtsTokenCount,
-            FALSE AS truncated
-        ) AS metadata)
+            3000000 AS totaltokencount,
+            2000000 AS prompttokencount,
+            1000000 AS candidatestokencount,
+            0 AS cachedcontenttokencount,
+            0 AS thoughtstokencount
+        ) AS apirequest)
     )
     """
 

@@ -4,6 +4,7 @@ import {
   Avatar,
   Box,
   Button,
+  Chip,
   Divider,
   Drawer,
   FormControl,
@@ -136,6 +137,19 @@ export const UserDrawer: React.FC<UserDrawerProps> = ({
 
   const currentUsage = user.current_week;
   const breakdown = currentUsage.spend_breakdown;
+  const modelDetails = Object.values(currentUsage.token_details_by_model || {});
+  const totalFallbackTokens = modelDetails.reduce((acc, d) => acc + (d.fallback_tokens || 0), 0);
+  const totalGranularTokens = modelDetails.reduce(
+    (acc, d) =>
+      acc +
+      (d.prompt_tokens || 0) +
+      (d.candidates_tokens || 0) +
+      (d.cached_tokens || 0) +
+      (d.thoughts_tokens || 0),
+    0
+  );
+  const isBlendedOnly = currentUsage.total_tokens > 0 && totalGranularTokens === 0;
+  const isHybridSpend = totalFallbackTokens > 0 && totalGranularTokens > 0;
 
   return (
     <Drawer
@@ -307,10 +321,31 @@ export const UserDrawer: React.FC<UserDrawerProps> = ({
           )}
         </Paper>
 
-        {/* Hinge Point Breakdown */}
-        <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-          Granular Token & Cost Distribution
-        </Typography>
+        {/* Hinge Point / Granular Breakdown */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+          <Typography variant="subtitle2">
+            Token &amp; Cost Distribution
+          </Typography>
+          {currentUsage.total_tokens > 0 && (
+            <Chip
+              size="small"
+              label={
+                isBlendedOnly
+                  ? 'Blended Hinge Estimate'
+                  : isHybridSpend
+                  ? 'Hybrid (Granular + Blended)'
+                  : 'Exact Granular'
+              }
+              sx={{
+                height: 20,
+                fontSize: 10,
+                fontWeight: 700,
+                bgcolor: isBlendedOnly ? '#fef7e0' : '#e6f4ea',
+                color: isBlendedOnly ? '#b06000' : '#188038',
+              }}
+            />
+          )}
+        </Box>
         <Paper elevation={0} sx={{ p: 2, mb: 3, border: '1px solid #dadce0', bgcolor: '#ffffff' }}>
           <Grid container spacing={1}>
             <Grid item xs={4}>
@@ -322,7 +357,7 @@ export const UserDrawer: React.FC<UserDrawerProps> = ({
               </Typography>
               {breakdown.input_tokens !== undefined && breakdown.input_tokens > 0 && (
                 <Typography variant="caption" sx={{ color: '#70757a', display: 'block' }}>
-                  {breakdown.input_tokens.toLocaleString()} tok
+                  {isBlendedOnly ? '~' : ''}{breakdown.input_tokens.toLocaleString()} tok
                 </Typography>
               )}
             </Grid>
@@ -335,7 +370,7 @@ export const UserDrawer: React.FC<UserDrawerProps> = ({
               </Typography>
               {breakdown.output_tokens !== undefined && breakdown.output_tokens > 0 && (
                 <Typography variant="caption" sx={{ color: '#70757a', display: 'block' }}>
-                  {breakdown.output_tokens.toLocaleString()} tok
+                  {isBlendedOnly ? '~' : ''}{breakdown.output_tokens.toLocaleString()} tok
                   {breakdown.thoughts_tokens ? ` (${breakdown.thoughts_tokens.toLocaleString()} thought)` : ''}
                 </Typography>
               )}
@@ -349,11 +384,16 @@ export const UserDrawer: React.FC<UserDrawerProps> = ({
               </Typography>
               {breakdown.cached_tokens !== undefined && breakdown.cached_tokens > 0 && (
                 <Typography variant="caption" sx={{ color: '#70757a', display: 'block' }}>
-                  {breakdown.cached_tokens.toLocaleString()} tok
+                  {isBlendedOnly ? '~' : ''}{breakdown.cached_tokens.toLocaleString()} tok
                 </Typography>
               )}
             </Grid>
           </Grid>
+          {(isBlendedOnly || isHybridSpend) && (
+            <Typography variant="caption" sx={{ color: '#5f6368', display: 'block', mt: 1.25, lineHeight: 1.4 }}>
+              Exact token total from <code>MetadataLog</code> (<code>apiRequest.totalTokenCount</code>); input/output/cached split is estimated using model hinge-point ratios when granular sub-counts are omitted.
+            </Typography>
+          )}
         </Paper>
 
         {/* Quota Management Controls */}

@@ -132,7 +132,7 @@ export const KPISummary: React.FC<KPISummaryProps> = ({
     {
       title: 'Total Gross Usage',
       value: kpis && cycleGross !== undefined ? `$${cycleGross.toFixed(2)}` : '-',
-      subtext: 'Actual Token Spend',
+      subtext: 'Estimated Token Spend',
       icon: <AttachMoneyOutlinedIcon sx={{ color: '#e37400' }} />,
       bgColor: '#fef7e0',
     },

@@ -1,9 +1,14 @@
 """BigQuery client for aggregating Antigravity inference token usage."""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
+import json
 import logging
 import re
 import threading
 from datetime import UTC, datetime
+from typing import Any
 
 from google.api_core import exceptions as api_exceptions
 from google.cloud import bigquery
@@ -104,6 +109,121 @@ def _is_benign_missing_table_error(exc: Exception) -> bool:
     ):
         return True
     return False
+
+
+_TOKEN_KEY_VARIANTS: dict[str, tuple[str, str, str]] = {
+    "total_tokens": ("totalTokenCount", "totaltokencount", "total_token_count"),
+    "prompt_tokens": ("promptTokenCount", "prompttokencount", "prompt_token_count"),
+    "candidates_tokens": ("candidatesTokenCount", "candidatestokencount", "candidates_token_count"),
+    "cached_tokens": (
+        "cachedContentTokenCount",
+        "cachedcontenttokencount",
+        "cached_content_token_count",
+    ),
+    "thoughts_tokens": ("thoughtsTokenCount", "thoughtstokencount", "thoughts_token_count"),
+}
+
+
+def _safe_int(value: Any) -> int | None:
+    """Coerce a JSON scalar to an integer, returning None when absent or unparseable."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_metadata_log_tokens(
+    payload: str | Mapping[str, Any] | None,
+    context_tier_threshold_tokens: int = 200000,
+) -> dict[str, int] | None:
+    """Extract normalized token counters from a `jsonpayload_v1_metadatalog` object or JSON string.
+
+    Mirrors the BigQuery `token_events` + `parsed_events` SQL extraction rules:
+    1. Resolves canonical `MetadataLog.api_request` (`apiRequest` / `apirequest` / `api_request`),
+       falling back to legacy/custom `.metadata` or top-level token fields.
+    2. Returns `None` for `NULL` payloads and non-inference `MetadataLog` `oneof details` events
+       (`code_exposure`, `code_acceptance`, `chat_exposure`, `ai_characters_report`,
+       `chat_acceptance`) so non-inference telemetry never inflates `request_count` or creates
+       0-token rows.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        raw = payload.strip()
+        if not raw or raw == "null":
+            return None
+        try:
+            parsed_obj = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(payload, Mapping):
+        parsed_obj = dict(payload)
+    else:
+        return None
+
+    if not isinstance(parsed_obj, Mapping):
+        return None
+
+    meta_obj: Mapping[str, Any] | None = None
+    for container_key in ("apiRequest", "apirequest", "api_request", "metadata"):
+        candidate = parsed_obj.get(container_key)
+        if isinstance(candidate, Mapping):
+            # Skip an all-null struct only if a subsequent container (e.g. custom .metadata view)
+            # holds non-null values; otherwise retain the container so valid 0-token API requests
+            # remain distinguishable from non-inference MetadataLog variants.
+            if any(v is not None for v in candidate.values()):
+                meta_obj = candidate
+                break
+            if meta_obj is None:
+                meta_obj = candidate
+
+    if meta_obj is None:
+        top_level_token_keys = (
+            *_TOKEN_KEY_VARIANTS["total_tokens"],
+            *_TOKEN_KEY_VARIANTS["prompt_tokens"],
+        )
+        if any(parsed_obj.get(k) is not None for k in top_level_token_keys):
+            meta_obj = parsed_obj
+        else:
+            return None
+
+    extracted: dict[str, int] = {}
+    for field_name, key_variants in _TOKEN_KEY_VARIANTS.items():
+        val = 0
+        for k in key_variants:
+            coerced = _safe_int(meta_obj.get(k))
+            if coerced is not None:
+                val = max(0, coerced)
+                break
+        extracted[field_name] = val
+
+    total_tokens = extracted["total_tokens"]
+    prompt_tokens = extracted["prompt_tokens"]
+    candidates_tokens = extracted["candidates_tokens"]
+    cached_tokens = extracted["cached_tokens"]
+    thoughts_tokens = extracted["thoughts_tokens"]
+    granular_sum = prompt_tokens + candidates_tokens + cached_tokens + thoughts_tokens
+    token_count = (
+        total_tokens
+        if total_tokens > 0
+        else (max(prompt_tokens, cached_tokens) + candidates_tokens + thoughts_tokens)
+    )
+    is_gt = prompt_tokens > int(context_tier_threshold_tokens)
+    return {
+        "token_count": token_count,
+        "total_tokens": total_tokens,
+        "prompt_tokens": prompt_tokens,
+        "candidates_tokens": candidates_tokens,
+        "cached_tokens": cached_tokens,
+        "thoughts_tokens": thoughts_tokens,
+        "prompt_tokens_gt_200k": prompt_tokens if is_gt else 0,
+        "candidates_tokens_gt_200k": candidates_tokens if is_gt else 0,
+        "cached_tokens_gt_200k": cached_tokens if is_gt else 0,
+        "thoughts_tokens_gt_200k": thoughts_tokens if is_gt else 0,
+        "fallback_tokens": total_tokens if granular_sum == 0 else 0,
+    }
 
 
 class UserUsageRecord(BaseModel):
@@ -235,6 +355,7 @@ class BigQueryUsageClient:
         WITH raw_events AS (
           SELECT
             timestamp,
+            insertId,
             COALESCE(
               resource.labels.project_id,
               REGEXP_EXTRACT(logName, r'^projects/([^/]+)/'),
@@ -242,7 +363,7 @@ class BigQueryUsageClient:
             ) AS project_id,
             LOWER(TRIM(REGEXP_REPLACE(labels.user_id, r'^(?i)user:', ''))) AS user_email,
             COALESCE(NULLIF(TRIM(labels.model), ''), 'gemini-3.8-flash') AS model_name,
-            TO_JSON_STRING(jsonpayload_v1_metadatalog.metadata) AS meta_json
+            TO_JSON_STRING(jsonpayload_v1_metadatalog) AS payload_json
           FROM
             `{self.project_id}.{self.dataset_name}.businessaicode_googleapis_com_metadata{table_suffix}`
           WHERE
@@ -250,10 +371,34 @@ class BigQueryUsageClient:
             AND timestamp <= @end_timestamp_utc
             {shard_filter}
             {dedup_cross_table_filter}
-          QUALIFY ROW_NUMBER() OVER (
-            PARTITION BY COALESCE(NULLIF(insertId, ''), CAST(timestamp AS STRING))
-            ORDER BY timestamp DESC
-          ) = 1
+        ),
+        token_events AS (
+          SELECT
+            timestamp,
+            insertId,
+            project_id,
+            user_email,
+            model_name,
+            COALESCE(
+              NULLIF(JSON_QUERY(payload_json, '$.apiRequest'), 'null'),
+              NULLIF(JSON_QUERY(payload_json, '$.apirequest'), 'null'),
+              NULLIF(JSON_QUERY(payload_json, '$.api_request'), 'null'),
+              NULLIF(JSON_QUERY(payload_json, '$.metadata'), 'null'),
+              CASE
+                WHEN COALESCE(
+                  JSON_VALUE(payload_json, '$.totalTokenCount'),
+                  JSON_VALUE(payload_json, '$.totaltokencount'),
+                  JSON_VALUE(payload_json, '$.total_token_count'),
+                  JSON_VALUE(payload_json, '$.promptTokenCount'),
+                  JSON_VALUE(payload_json, '$.prompttokencount'),
+                  JSON_VALUE(payload_json, '$.prompt_token_count')
+                ) IS NOT NULL THEN payload_json
+                ELSE NULL
+              END
+            ) AS meta_json,
+            NULLIF(JSON_QUERY(payload_json, '$.metadata'), 'null') AS legacy_meta_json
+          FROM
+            raw_events
         ),
         parsed_events AS (
           SELECT
@@ -265,34 +410,66 @@ class BigQueryUsageClient:
               SAFE_CAST(JSON_VALUE(meta_json, '$.totalTokenCount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.totaltokencount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.total_token_count') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.totalTokenCount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.totaltokencount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.total_token_count') AS INT64),
               0
             ) AS total_tokens,
             COALESCE(
               SAFE_CAST(JSON_VALUE(meta_json, '$.promptTokenCount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.prompttokencount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.prompt_token_count') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.promptTokenCount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.prompttokencount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.prompt_token_count') AS INT64),
               0
             ) AS prompt_tokens,
             COALESCE(
               SAFE_CAST(JSON_VALUE(meta_json, '$.candidatesTokenCount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.candidatestokencount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.candidates_token_count') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidatesTokenCount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidatestokencount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidates_token_count') AS INT64),
               0
             ) AS candidates_tokens,
             COALESCE(
               SAFE_CAST(JSON_VALUE(meta_json, '$.cachedContentTokenCount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.cachedcontenttokencount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.cached_content_token_count') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cachedContentTokenCount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cachedcontenttokencount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cached_content_token_count') AS INT64),
               0
             ) AS cached_tokens,
             COALESCE(
               SAFE_CAST(JSON_VALUE(meta_json, '$.thoughtsTokenCount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.thoughtstokencount') AS INT64),
               SAFE_CAST(JSON_VALUE(meta_json, '$.thoughts_token_count') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughtsTokenCount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughtstokencount') AS INT64),
+              SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughts_token_count') AS INT64),
               0
             ) AS thoughts_tokens
           FROM
-            raw_events
+            token_events
+          WHERE
+            meta_json IS NOT NULL
+          QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(
+              NULLIF(insertId, ''),
+              CONCAT(
+                COALESCE(project_id, ''),
+                '|',
+                COALESCE(user_email, ''),
+                '|',
+                COALESCE(model_name, ''),
+                '|',
+                CAST(timestamp AS STRING)
+              )
+            )
+            ORDER BY timestamp DESC
+          ) = 1
         )
         SELECT
           project_id,

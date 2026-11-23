@@ -58,11 +58,11 @@ flowchart TD
 In Antigravity enterprise deployments, user quotas are distributed as **credit allocations**. To provide accurate FinOps reporting, the system calculates both gross usage and net liability:
 
 1. **Gross Estimated Cost ($C_{\text{gross}}$)**:
-   * **Granular Token Telemetry & Context-Length Tiered Pricing (`>200K` tokens)**: When granular token fields (`prompt`, `candidates`, `cached`, `thoughts`) are present in the BigQuery inference metadata, effective non-cached input tokens ($\max(0, \text{prompt} - \text{cached})$), cached context tokens ($\text{cached}$), and output + reasoning tokens ($\text{candidates} + \text{thoughts}$) are priced directly across standard ($\le 200\text{K}$ prompt tokens: $P_{\text{in}}, P_{\text{out}}, P_{\text{cache}}$) and long-context ($> 200\text{K}$ prompt tokens: $P_{\text{in, >200K}}, P_{\text{out, >200K}}, P_{\text{cache, >200K}}$) tiers:
-     $$C_{\text{gross}} = C_{\text{standard (\le 200K)}} + C_{\text{long-context (> 200K)}}$$
-   * **Blended Rate Fallback ($R_{\text{blended}}$)**: For legacy or summarized records lacking granular token breakdowns (`fallback_tokens`), spend is estimated using the model's hinge ratios:
+   * **Blended Hinge-Point Estimation (`totalTokenCount`-Only `MetadataLog` Default)**: Canonical `businessaicode.googleapis.com/metadata` (`MetadataLog`) exports currently populate `apiRequest.totalTokenCount` (`jsonpayload_v1_metadatalog.apirequest.totaltokencount`). Total token counts are exact, while USD spend for records without granular sub-counts (`fallback_tokens`) is estimated using each model's configured hinge ratios:
      $$\text{Blended Rate Per 1M Tokens } (R_{\text{blended}}) = (w_{\text{in}} \cdot P_{\text{in}}) + (w_{\text{out}} \cdot P_{\text{out}}) + (w_{\text{cache}} \cdot P_{\text{cache}})$$
      $$C_{\text{fallback}} = \frac{T_{\text{fallback}} \times R_{\text{blended}}}{1,000,000}$$
+   * **Automatic Granular Token & Context-Length Tiered Pricing (`>200K` tokens)**: Whenever granular `RequestInfo` token fields (`promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`) are populated on `apiRequest` (or exposed via a custom `.metadata` BigQuery view), effective non-cached input tokens ($\max(0, \text{prompt} - \text{cached})$), cached context tokens ($\text{cached}$), and output + reasoning tokens ($\text{candidates} + \text{thoughts}$) are priced directly across standard ($\le 200\text{K}$ prompt tokens: $P_{\text{in}}, P_{\text{out}}, P_{\text{cache}}$) and long-context ($> 200\text{K}$ prompt tokens: $P_{\text{in, >200K}}, P_{\text{out, >200K}}, P_{\text{cache, >200K}}$) tiers:
+     $$C_{\text{gross}} = C_{\text{standard (\le 200K)}} + C_{\text{long-context (> 200K)}} + C_{\text{fallback}}$$
 
 2. **Allocated Quota Credits ($Q$)**:
    The weekly credit amount granted to the developer (e.g. \$10.00).
@@ -360,14 +360,15 @@ The portal loads its default 14-entry pricing catalog from [`config/model_pricin
 WITH raw_events AS (
   SELECT
     timestamp,
+    insertId,
     COALESCE(
       resource.labels.project_id,
       REGEXP_EXTRACT(logName, r'^projects/([^/]+)/'),
       @fallback_project_id
     ) AS project_id,
-    LOWER(TRIM(REPLACE(labels.user_id, 'user:', ''))) AS user_email,
-    COALESCE(labels.model, 'gemini-3.8-flash') AS model_name,
-    TO_JSON_STRING(jsonpayload_v1_metadatalog.metadata) AS meta_json
+    LOWER(TRIM(REGEXP_REPLACE(labels.user_id, r'^(?i)user:', ''))) AS user_email,
+    COALESCE(NULLIF(TRIM(labels.model), ''), 'gemini-3.8-flash') AS model_name,
+    TO_JSON_STRING(jsonpayload_v1_metadatalog) AS payload_json
   FROM
     `{{PROJECT_ID}}.{{DATASET_NAME}}.businessaicode_googleapis_com_metadata_*`
   WHERE
@@ -375,10 +376,34 @@ WITH raw_events AS (
     AND timestamp <= @end_timestamp_utc
     AND _TABLE_SUFFIX BETWEEN FORMAT_TIMESTAMP('%Y%m%d', @min_start_timestamp_utc)
     AND FORMAT_TIMESTAMP('%Y%m%d', @end_timestamp_utc)
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY COALESCE(NULLIF(insertId, ''), CAST(timestamp AS STRING))
-    ORDER BY timestamp DESC
-  ) = 1
+),
+token_events AS (
+  SELECT
+    timestamp,
+    insertId,
+    project_id,
+    user_email,
+    model_name,
+    COALESCE(
+      NULLIF(JSON_QUERY(payload_json, '$.apiRequest'), 'null'),
+      NULLIF(JSON_QUERY(payload_json, '$.apirequest'), 'null'),
+      NULLIF(JSON_QUERY(payload_json, '$.api_request'), 'null'),
+      NULLIF(JSON_QUERY(payload_json, '$.metadata'), 'null'),
+      CASE
+        WHEN COALESCE(
+          JSON_VALUE(payload_json, '$.totalTokenCount'),
+          JSON_VALUE(payload_json, '$.totaltokencount'),
+          JSON_VALUE(payload_json, '$.total_token_count'),
+          JSON_VALUE(payload_json, '$.promptTokenCount'),
+          JSON_VALUE(payload_json, '$.prompttokencount'),
+          JSON_VALUE(payload_json, '$.prompt_token_count')
+        ) IS NOT NULL THEN payload_json
+        ELSE NULL
+      END
+    ) AS meta_json,
+    NULLIF(JSON_QUERY(payload_json, '$.metadata'), 'null') AS legacy_meta_json
+  FROM
+    raw_events
 ),
 parsed_events AS (
   SELECT
@@ -388,36 +413,68 @@ parsed_events AS (
     model_name,
     COALESCE(
       SAFE_CAST(JSON_VALUE(meta_json, '$.totalTokenCount') AS INT64),
-      SAFE_CAST(JSON_VALUE(meta_json, '$.total_token_count') AS INT64),
       SAFE_CAST(JSON_VALUE(meta_json, '$.totaltokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(meta_json, '$.total_token_count') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.totalTokenCount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.totaltokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.total_token_count') AS INT64),
       0
     ) AS total_tokens,
     COALESCE(
       SAFE_CAST(JSON_VALUE(meta_json, '$.promptTokenCount') AS INT64),
-      SAFE_CAST(JSON_VALUE(meta_json, '$.prompt_token_count') AS INT64),
       SAFE_CAST(JSON_VALUE(meta_json, '$.prompttokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(meta_json, '$.prompt_token_count') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.promptTokenCount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.prompttokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.prompt_token_count') AS INT64),
       0
     ) AS prompt_tokens,
     COALESCE(
       SAFE_CAST(JSON_VALUE(meta_json, '$.candidatesTokenCount') AS INT64),
-      SAFE_CAST(JSON_VALUE(meta_json, '$.candidates_token_count') AS INT64),
       SAFE_CAST(JSON_VALUE(meta_json, '$.candidatestokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(meta_json, '$.candidates_token_count') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidatesTokenCount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidatestokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.candidates_token_count') AS INT64),
       0
     ) AS candidates_tokens,
     COALESCE(
       SAFE_CAST(JSON_VALUE(meta_json, '$.cachedContentTokenCount') AS INT64),
-      SAFE_CAST(JSON_VALUE(meta_json, '$.cached_content_token_count') AS INT64),
       SAFE_CAST(JSON_VALUE(meta_json, '$.cachedcontenttokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(meta_json, '$.cached_content_token_count') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cachedContentTokenCount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cachedcontenttokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.cached_content_token_count') AS INT64),
       0
     ) AS cached_tokens,
     COALESCE(
       SAFE_CAST(JSON_VALUE(meta_json, '$.thoughtsTokenCount') AS INT64),
-      SAFE_CAST(JSON_VALUE(meta_json, '$.thoughts_token_count') AS INT64),
       SAFE_CAST(JSON_VALUE(meta_json, '$.thoughtstokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(meta_json, '$.thoughts_token_count') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughtsTokenCount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughtstokencount') AS INT64),
+      SAFE_CAST(JSON_VALUE(legacy_meta_json, '$.thoughts_token_count') AS INT64),
       0
     ) AS thoughts_tokens
   FROM
-    raw_events
+    token_events
+  WHERE
+    meta_json IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(
+      NULLIF(insertId, ''),
+      CONCAT(
+        COALESCE(project_id, ''),
+        '|',
+        COALESCE(user_email, ''),
+        '|',
+        COALESCE(model_name, ''),
+        '|',
+        CAST(timestamp AS STRING)
+      )
+    )
+    ORDER BY timestamp DESC
+  ) = 1
 )
 SELECT
   project_id,
@@ -427,7 +484,7 @@ SELECT
   SUM(
     CASE
       WHEN total_tokens > 0 THEN total_tokens
-      ELSE prompt_tokens + candidates_tokens + thoughts_tokens
+      ELSE GREATEST(prompt_tokens, cached_tokens) + candidates_tokens + thoughts_tokens
     END
   ) AS token_count,
   SUM(prompt_tokens) AS prompt_tokens,

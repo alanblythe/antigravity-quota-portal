@@ -223,4 +223,56 @@ def test_gemini_4_argon_spend_calculation():
     assert breakdown.cached_spend_usd == 0.0125
 
 
+def test_total_token_only_metadata_log_uses_blended_hinge_and_switches_automatically_on_granular():
+    """Verify totalTokenCount-only MetadataLog rows price via blended hinge ratios (even when
+    fallback_tokens defaults to 0) and automatically switch to exact + >200K pricing once granular
+    RequestInfo fields are populated."""
+    pricing = DEFAULT_MODEL_PRICING["gemini-3-pro"]
+    # 1) Canonical totalTokenCount-only (prompt/candidates/cached/thoughts = 0, fallback_tokens = 0 default):
+    #    1,000,000 tokens * $3.82/1M blended = $3.82
+    blended_gross, blended_bd = calculate_model_spend(
+        token_count=1_000_000,
+        pricing=pricing,
+        prompt_tokens=0,
+        candidates_tokens=0,
+        cached_tokens=0,
+        thoughts_tokens=0,
+        fallback_tokens=0,
+    )
+    assert blended_gross == 3.82
+    assert blended_bd.input_tokens == 700_000
+    assert blended_bd.output_tokens == 200_000
+    assert blended_bd.cached_tokens == 100_000
+    assert blended_bd.thoughts_tokens == 0
+
+    # 2) Once businessaicode.googleapis.com MetadataLog populates granular RequestInfo fields
+    #    (>200K prompt call: 300k prompt w/ 50k cached, 80k candidates, 20k thoughts -> 400k total):
+    #    - Effective >200K input: 250k * $4.00/1M = $1.00
+    #    - >200K cached:           50k * $0.40/1M = $0.02
+    #    - >200K output+thoughts: 100k * $18.00/1M = $1.80
+    #    Total exact >200K spend = $2.82 (vs $1.528 if blended were used)
+    exact_gross, exact_bd = calculate_model_spend(
+        token_count=400_000,
+        pricing=pricing,
+        prompt_tokens=300_000,
+        candidates_tokens=80_000,
+        cached_tokens=50_000,
+        thoughts_tokens=20_000,
+        prompt_tokens_gt_200k=300_000,
+        candidates_tokens_gt_200k=80_000,
+        cached_tokens_gt_200k=50_000,
+        thoughts_tokens_gt_200k=20_000,
+        fallback_tokens=0,
+    )
+    assert exact_gross == 2.82
+    assert exact_bd.input_spend_usd == 1.00
+    assert exact_bd.output_spend_usd == 1.80
+    assert exact_bd.cached_spend_usd == 0.02
+    assert exact_bd.input_tokens == 250_000
+    assert exact_bd.output_tokens == 100_000
+    assert exact_bd.cached_tokens == 50_000
+    assert exact_bd.thoughts_tokens == 20_000
+
+
+
 

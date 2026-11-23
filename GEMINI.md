@@ -25,8 +25,8 @@ Project-level context, architectural guidelines, and key operational patterns fo
 * **WTU-Locked Weekly Reset & Fallback Window** ([`app/bq/wtu_client.py`](app/bq/wtu_client.py), [`app/core/timezone_engine.py`](app/core/timezone_engine.py)):
   * Each monitored project's 7-day cycle window is anchored to its Discovery Engine `window_start_time` (`active_cycle_start_utc` to `active_cycle_reset_utc = start + 7 days`).
   * Falls back to **Monday 00:00:00 to Sunday 23:59:59** in the configured application timezone (default: `America/Los_Angeles`) when no WTU window has been established yet.
-* **Credit & Billable Overages Math** ([`app/core/cost_model.py`](app/core/cost_model.py)):
-  * **Gross Spend ($C_{\text{gross}}$)**: Total estimated token value consumed in the active 7-day cycle (supporting granular `prompt`, `candidates`, `cached`, `thoughts` token telemetry and `>200k` context tier rates).
+* **Credit & Billable Overages Math** ([`app/core/cost_model.py`](app/core/cost_model.py), [`app/bq/bq_client.py`](app/bq/bq_client.py)):
+  * **Gross Spend ($C_{\text{gross}}$)**: Total estimated token value consumed in the active 7-day cycle. Canonical `businessaicode.googleapis.com/metadata` (`MetadataLog`) exports currently populate `jsonpayload_v1_metadatalog.apirequest.totaltokencount` (exact total token counts priced via blended hinge-point ratios), and `cost_model.py` automatically switches to exact per-token-type (`prompt`, `candidates`, `cached`, `thoughts`) + `>200k` context-tier rates whenever granular `RequestInfo` fields (or custom `.metadata` views) are populated.
   * **Remaining Credit ($B_{\text{credit}}$)**: $\max(0, Q - C_{\text{gross}})$, where $Q$ is developer quota.
   * **Net Billable Cost ($C_{\text{net}}$)**: $\max(0, C_{\text{gross}} - Q)$ (liability after credit depletion).
   * **Hard Quota Limit**: $Q + O$, where $O$ is overage buffer. Auto-throttles when $C_{\text{gross}} \ge Q + O$.

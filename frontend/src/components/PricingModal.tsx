@@ -116,7 +116,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </Alert>
         )}
         <Typography variant="body2" sx={{ color: '#5f6368', mb: 2 }}>
-          Configure per-million token rates (seeded from <code>config/model_pricing.json</code>) and fallback hinge ratios used to compute gross spend from Cloud Logging audit events.
+          Configure per-million token rates (seeded from <code>config/model_pricing.json</code>) and hinge-point ratios. When Cloud Logging <code>MetadataLog</code> emits <code>apiRequest.totalTokenCount</code> without granular sub-counts, exact token totals are priced at each model&apos;s blended hinge rate; when granular <code>prompt</code>, <code>candidates</code>, <code>cached</code>, or <code>thoughts</code> token fields are populated, billing automatically switches to exact per-token-type and &gt;200K context-tier rates.
         </Typography>
 
         <TableContainer component={Paper} elevation={0} sx={{ border: '1px solid #dadce0' }}>

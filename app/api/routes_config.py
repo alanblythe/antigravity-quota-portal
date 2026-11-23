@@ -101,18 +101,27 @@ def _recalculate_all_users_spend(
         tokens_by_model = u.current_week.tokens_by_model or {}
         granular_by_model: dict[str, dict[str, int]] = {}
         for m_name, details in (u.current_week.token_details_by_model or {}).items():
+            p_tok = int(getattr(details, "prompt_tokens", 0) or 0)
+            c_tok = int(getattr(details, "candidates_tokens", 0) or 0)
+            ca_tok = int(getattr(details, "cached_tokens", 0) or 0)
+            th_tok = int(getattr(details, "thoughts_tokens", 0) or 0)
+            fb_tok = int(getattr(details, "fallback_tokens", 0) or 0)
+            if fb_tok == 0 and (p_tok + c_tok + ca_tok + th_tok) == 0:
+                fb_tok = int(
+                    tokens_by_model.get(m_name, 0) or getattr(details, "total_tokens", 0) or 0
+                )
             granular_by_model[m_name] = {
-                "prompt_tokens": int(getattr(details, "prompt_tokens", 0) or 0),
-                "candidates_tokens": int(getattr(details, "candidates_tokens", 0) or 0),
-                "cached_tokens": int(getattr(details, "cached_tokens", 0) or 0),
-                "thoughts_tokens": int(getattr(details, "thoughts_tokens", 0) or 0),
+                "prompt_tokens": p_tok,
+                "candidates_tokens": c_tok,
+                "cached_tokens": ca_tok,
+                "thoughts_tokens": th_tok,
                 "prompt_tokens_gt_200k": int(getattr(details, "prompt_tokens_gt_200k", 0) or 0),
                 "candidates_tokens_gt_200k": int(
                     getattr(details, "candidates_tokens_gt_200k", 0) or 0
                 ),
                 "cached_tokens_gt_200k": int(getattr(details, "cached_tokens_gt_200k", 0) or 0),
                 "thoughts_tokens_gt_200k": int(getattr(details, "thoughts_tokens_gt_200k", 0) or 0),
-                "fallback_tokens": int(getattr(details, "fallback_tokens", 0) or 0),
+                "fallback_tokens": fb_tok,
             }
         (
             gross_spend,

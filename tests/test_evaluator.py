@@ -1116,7 +1116,9 @@ def test_evaluator_weekly_reset_swap_failure_preserves_prior_week_usage(
 
 
 def test_bq_client_query_uses_canonical_metadata_table_and_null_safe_insert_id_dedup():
-    """Verify _build_usage_query targets metadata tables and null-safe insertId dedup."""
+    """Verify _build_usage_query serializes jsonpayload_v1_metadatalog once, coalesces
+    apiRequest/apirequest/api_request with legacy .metadata fallback, excludes non-inference
+    MetadataLog events, and uses null-safe insertId dedup."""
     from unittest.mock import patch
 
     from app.bq.bq_client import BigQueryUsageClient
@@ -1128,11 +1130,251 @@ def test_bq_client_query_uses_canonical_metadata_table_and_null_safe_insert_id_d
     unsharded_sql = client._build_usage_query(use_wildcard_shards=False, exclude_sharded_insert_ids=True)
 
     assert "`host-proj.antigravity_logs.businessaicode_googleapis_com_metadata_*`" in sharded_sql
-    assert "TO_JSON_STRING(jsonpayload_v1_metadatalog.metadata) AS meta_json" in sharded_sql
-    assert "PARTITION BY COALESCE(NULLIF(insertId, ''), CAST(timestamp AS STRING))" in sharded_sql
+    assert "TO_JSON_STRING(jsonpayload_v1_metadatalog) AS payload_json" in sharded_sql
+    assert "jsonpayload_v1_metadatalog.metadata" not in sharded_sql
+    assert "NULLIF(JSON_QUERY(payload_json, '$.apiRequest'), 'null')" in sharded_sql
+    assert "NULLIF(JSON_QUERY(payload_json, '$.apirequest'), 'null')" in sharded_sql
+    assert "NULLIF(JSON_QUERY(payload_json, '$.api_request'), 'null')" in sharded_sql
+    assert "NULLIF(JSON_QUERY(payload_json, '$.metadata'), 'null')" in sharded_sql
+    assert "WHERE\n            meta_json IS NOT NULL" in sharded_sql
+    assert "NULLIF(insertId, '')" in sharded_sql
+    assert "CAST(timestamp AS STRING)" in sharded_sql
     assert "$.total_token_count" in sharded_sql
     assert "`host-proj.antigravity_logs.businessaicode_googleapis_com_metadata`" in unsharded_sql
-    assert "PARTITION BY COALESCE(NULLIF(insertId, ''), CAST(timestamp AS STRING))" in unsharded_sql
+    assert "TO_JSON_STRING(jsonpayload_v1_metadatalog) AS payload_json" in unsharded_sql
+    assert "NULLIF(insertId, '')" in unsharded_sql
+
+
+def test_extract_metadata_log_tokens_canonical_apirequest_granular_and_legacy_metadata_fallback():
+    """Verify canonical businessaicode.googleapis.com MetadataLog payloads (apirequest / apiRequest /
+    api_request), legacy .metadata fallback, and non-inference MetadataLog oneof filtering."""
+    import json
+
+    from app.bq.bq_client import extract_metadata_log_tokens
+
+    # 1. Canonical Cloud Logging BigQuery export: lowercase `apirequest` with `totaltokencount` only
+    canonical_total_only = json.dumps(
+        {
+            "requestid": "req-001",
+            "clientname": "antigravity_cli",
+            "clientversion": "1.104.0",
+            "apirequest": {
+                "totaltokencount": 8664,
+                "prompttokencount": None,
+                "candidatestokencount": None,
+                "cachedcontenttokencount": None,
+                "thoughtstokencount": None,
+            },
+        }
+    )
+    parsed_total_only = extract_metadata_log_tokens(canonical_total_only)
+    assert parsed_total_only is not None
+    assert parsed_total_only["token_count"] == 8664
+    assert parsed_total_only["total_tokens"] == 8664
+    assert parsed_total_only["prompt_tokens"] == 0
+    assert parsed_total_only["candidates_tokens"] == 0
+    assert parsed_total_only["cached_tokens"] == 0
+    assert parsed_total_only["thoughts_tokens"] == 0
+    assert parsed_total_only["fallback_tokens"] == 8664
+
+    # 2. Canonical camelCase `apiRequest` with full granular counts + >200K context tier
+    canonical_granular_gt200k = json.dumps(
+        {
+            "requestId": "req-002",
+            "clientName": "antigravity_ide",
+            "apiRequest": {
+                "totalTokenCount": 350000,
+                "promptTokenCount": 250000,
+                "candidatesTokenCount": 80000,
+                "cachedContentTokenCount": 50000,
+                "thoughtsTokenCount": 20000,
+            },
+        }
+    )
+    parsed_granular = extract_metadata_log_tokens(canonical_granular_gt200k)
+    assert parsed_granular is not None
+    assert parsed_granular["token_count"] == 350000
+    assert parsed_granular["prompt_tokens"] == 250000
+    assert parsed_granular["candidates_tokens"] == 80000
+    assert parsed_granular["cached_tokens"] == 50000
+    assert parsed_granular["thoughts_tokens"] == 20000
+    assert parsed_granular["prompt_tokens_gt_200k"] == 250000
+    assert parsed_granular["candidates_tokens_gt_200k"] == 80000
+    assert parsed_granular["cached_tokens_gt_200k"] == 50000
+    assert parsed_granular["thoughts_tokens_gt_200k"] == 20000
+    assert parsed_granular["fallback_tokens"] == 0
+
+    # 3. Proto snake_case `api_request`
+    snake_payload = {
+        "api_request": {
+            "total_token_count": 12000,
+            "prompt_token_count": 10000,
+            "candidates_token_count": 1500,
+            "cached_content_token_count": 2000,
+            "thoughts_token_count": 500,
+        }
+    }
+    parsed_snake = extract_metadata_log_tokens(snake_payload)
+    assert parsed_snake is not None
+    assert parsed_snake["token_count"] == 12000
+    assert parsed_snake["prompt_tokens"] == 10000
+    assert parsed_snake["prompt_tokens_gt_200k"] == 0
+    assert parsed_snake["fallback_tokens"] == 0
+
+    # 4. Legacy `.metadata` custom view fallback (including when `apirequest` is serialized as JSON null
+    #    or an all-null struct alongside `.metadata`)
+    legacy_with_null_apirequest = json.dumps(
+        {
+            "apirequest": None,
+            "metadata": {
+                "totalTokenCount": 500000,
+                "promptTokenCount": 400000,
+                "candidatesTokenCount": 80000,
+                "cachedContentTokenCount": 100000,
+                "thoughtsTokenCount": 20000,
+            },
+        }
+    )
+    parsed_legacy = extract_metadata_log_tokens(legacy_with_null_apirequest)
+    assert parsed_legacy is not None
+    assert parsed_legacy["token_count"] == 500000
+    assert parsed_legacy["prompt_tokens"] == 400000
+    assert parsed_legacy["prompt_tokens_gt_200k"] == 400000
+    assert parsed_legacy["fallback_tokens"] == 0
+
+    legacy_with_empty_apirequest_struct = json.dumps(
+        {
+            "apirequest": {"totaltokencount": None, "prompttokencount": None},
+            "metadata": {"totalTokenCount": 250000},
+        }
+    )
+    parsed_legacy_struct = extract_metadata_log_tokens(legacy_with_empty_apirequest_struct)
+    assert parsed_legacy_struct is not None
+    assert parsed_legacy_struct["token_count"] == 250000
+    assert parsed_legacy_struct["fallback_tokens"] == 250000
+
+    # 5. Non-inference MetadataLog `oneof details` variants MUST return None so they never create
+    #    0-token rows or inflate request_count
+    for non_inference_event in (
+        {"apirequest": None, "codeexposure": {"linescount": 12, "programminglanguage": "python"}},
+        {"apirequest": None, "codeacceptance": {"linescount": 8, "programminglanguage": "go"}},
+        {"apirequest": None, "chatexposure": {"programminglanguage": "typescript"}},
+        {
+            "apirequest": None,
+            "aicharactersreport": {
+                "aigeneratedcharactercount": 450,
+                "usereditedcharactercount": 120,
+                "programminglanguage": "python",
+            },
+        },
+        {"apirequest": None, "chatacceptance": {"linescount": 4}},
+        None,
+        "null",
+    ):
+        assert extract_metadata_log_tokens(non_inference_event) is None
+
+
+def test_end_to_end_evaluator_and_pricing_recalc_with_total_only_vs_granular_apirequest(
+    mock_db, mock_identity
+):
+    """Verify end-to-end BigQueryUsageClient + QuotaEvaluator + Pricing Matrix recalculation across
+    canonical totalTokenCount-only apirequest rows and granular >200K apirequest rows."""
+    import json
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock, patch
+
+    from app.api.routes_config import _recalculate_all_users_spend
+    from app.bq.bq_client import BigQueryUsageClient, extract_metadata_log_tokens
+    from app.core.evaluator import QuotaEvaluator
+    from app.db.models import UserStatus
+
+    now_utc = datetime.now(UTC)
+
+    # Simulate raw MetadataLog rows aggregated from canonical `jsonpayload_v1_metadatalog.apirequest`
+    dev_total_only_row = extract_metadata_log_tokens(
+        json.dumps({"apirequest": {"totaltokencount": 2_000_000}})
+    )
+    dev_granular_row = extract_metadata_log_tokens(
+        json.dumps(
+            {
+                "apiRequest": {
+                    "totalTokenCount": 1_500_000,
+                    "promptTokenCount": 1_000_000,
+                    "candidatesTokenCount": 400_000,
+                    "cachedContentTokenCount": 0,
+                    "thoughtsTokenCount": 100_000,
+                }
+            }
+        )
+    )
+    assert dev_total_only_row is not None and dev_granular_row is not None
+
+    mock_query_job = MagicMock()
+    mock_query_job.result.return_value = [
+        {
+            "project_id": "your-workload-project",
+            "user_email": "total.only@example.com",
+            "model_name": "gemini-4-argon",
+            "request_count": 25,
+            "last_active": now_utc,
+            **dev_total_only_row,
+        },
+        {
+            "project_id": "your-workload-project",
+            "user_email": "granular.tier@example.com",
+            "model_name": "gemini-3-pro",
+            "request_count": 10,
+            "last_active": now_utc,
+            **dev_granular_row,
+        },
+    ]
+
+    with patch("app.bq.bq_client.bigquery.Client") as mock_bq_cls:
+        raw_client = mock_bq_cls.return_value
+        t_ref = MagicMock()
+        t_ref.table_id = "businessaicode_googleapis_com_metadata"
+        raw_client.list_tables.return_value = [t_ref]
+        raw_client.query.return_value = mock_query_job
+
+        bq_client = BigQueryUsageClient(
+            project_id="your-portal-project",
+            dataset_name="antigravity_inference_logs",
+            default_workload_project_id="your-workload-project",
+        )
+        evaluator = QuotaEvaluator(
+            db_client=mock_db,
+            bq_client=bq_client,
+            identity_client=mock_identity,
+        )
+        res = evaluator.run_evaluation(triggered_by="apirequest_e2e_test", is_publish=True)
+        assert res.success is True
+
+    # 1) total.only@example.com: 2,000,000 tokens on gemini-4-argon ($2.8875/1M blended) -> $5.78
+    u_total = mock_db.get_user("total.only@example.com")
+    assert u_total is not None
+    assert u_total.status == UserStatus.ACTIVE
+    assert u_total.current_week.total_tokens == 2_000_000
+    assert u_total.current_week.total_requests == 25
+    assert u_total.current_week.gross_spend_usd == 5.78
+    assert u_total.current_week.token_details_by_model["gemini-4-argon"].fallback_tokens == 2_000_000
+
+    # 2) granular.tier@example.com: 1M >200K prompt ($4/1M = $4.00) + 500k >200K out+thoughts ($18/1M = $9.00)
+    #    = $13.00 >= $12.00 ($10 quota + $2 overage) -> AUTO_DISABLED
+    u_gran = mock_db.get_user("granular.tier@example.com")
+    assert u_gran is not None
+    assert u_gran.status == UserStatus.AUTO_DISABLED
+    assert u_gran.current_week.total_tokens == 1_500_000
+    assert u_gran.current_week.gross_spend_usd == 13.00
+    assert u_gran.current_week.token_details_by_model["gemini-3-pro"].fallback_tokens == 0
+
+    # 3) Verify Pricing Matrix recalculation preserves totalTokenCount-only spend even if a legacy
+    #    record had fallback_tokens=0 in Firestore
+    u_total.current_week.token_details_by_model["gemini-4-argon"].fallback_tokens = 0
+    mock_db.save_user(u_total)
+    cfg = mock_db.get_config()
+    _recalculate_all_users_spend(mock_db, cfg, identity=mock_identity)
+    u_total_recalc = mock_db.get_user("total.only@example.com")
+    assert u_total_recalc.current_week.gross_spend_usd == 5.78
 
 
 def test_cloud_identity_group_manager_idempotent_add_remove_and_reconcile():

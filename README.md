@@ -36,7 +36,7 @@
 1. **FinOps Credit, Context-Tiered Pricing & Developer Overage Model**:
     * Quotas are allocated as weekly dollar credits (`Q`, default `$10.00`) with remaining credit balance `B_credit = max(0, Q - C_gross)`.
     * Developer overage tracks usage beyond their assigned quota target: `C_overage = max(0, C_gross - Q)` with configurable overage buffer (`O`).
-    * **Granular Token Telemetry & Context-Length Tiered Pricing (`>200k` tokens)**: Calculates gross spend directly from the exact token counts emitted in Antigravity inference logs (`metadata.promptTokenCount`, `metadata.candidatesTokenCount`, `metadata.cachedContentTokenCount`, and `metadata.thoughtsTokenCount`), applying standard (`<=200k` prompt tokens) and long-context (`>200k` prompt tokens) pricing tiers from [`config/model_pricing.json`](config/model_pricing.json).
+    * **Exact Token Totals, Blended Hinge Estimates & Automatic Granular/Tiered Upgrade**: Extracts request-level token usage from canonical `MetadataLog` exports (`jsonpayload_v1_metadatalog.apirequest`, with fallback support for custom `.metadata` views). `businessaicode.googleapis.com/metadata` currently populates `apiRequest.totalTokenCount` (providing exact total token counts, priced using per-model blended hinge-point ratios from [`config/model_pricing.json`](config/model_pricing.json)); whenever granular `RequestInfo` token fields (`promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`) are populated, [`app/core/cost_model.py`](app/core/cost_model.py) automatically switches to exact per-token-type and long-context (`>200k` prompt tokens) tier billing.
     * **WTU-Locked Weekly Reset Windows**: Cycle boundaries track each project's active 7-day WTU sliding window (`wtu_window_start_at` to `wtu_window_reset_at`, with calendar Monday `00:00` fallback when WTU metrics are inactive) and archive historical snapshots to Firestore.
 2. **Dual-Group Cloud Identity State Machine**:
     * **`antigravity-enabled@`**: Bound to IAM role `roles/businessaicode.user` across all monitored workload projects.
@@ -147,42 +147,46 @@ flowchart TD
 >
 > *Without Metadata logging enabled, Google Cloud only emits standard Cloud Audit logs (`cloudaudit.googleapis.com/data_access`), which record authorization and method names (`StreamGenerateContent`) but **omit** token usage metrics. The dedicated `businessaicode.googleapis.com/metadata` log stream will not be generated, resulting in 0 tokens recorded in BigQuery and on the portal.*
 
-Inference telemetry is exported from Cloud Logging to BigQuery via the log sink from `businessaicode.googleapis.com/metadata`. Each log entry provides a structured `jsonpayload_v1_metadatalog.metadata` payload containing granular token telemetry per request:
+Inference telemetry is exported from Cloud Logging to BigQuery via the log sink from `businessaicode.googleapis.com/metadata` (`google.cloud.businessaicode.logging.v1.MetadataLog`). In BigQuery (`businessaicode_googleapis_com_metadata` / `businessaicode_googleapis_com_metadata_*`), API inference events populate the `oneof details` `api_request` (`RequestInfo`) sub-record under `jsonpayload_v1_metadatalog.apirequest` (`apiRequest` in JSON):
 
 ```json
-"metadata": {
+"apiRequest": {
   "totalTokenCount": 8664,
   "promptTokenCount": 7200,
   "candidatesTokenCount": 1400,
   "cachedContentTokenCount": 256,
-  "thoughtsTokenCount": 64,
-  "truncated": false
+  "thoughtsTokenCount": 64
 }
 ```
 
-### Telemetry Field Breakdown
-
-| Log Field | Type | Description & Billing Mapping |
-| :--- | :---: | :--- |
-| `promptTokenCount` | `int64` | **Input / Prompt Tokens**: Total input tokens submitted in the request (prompts, instructions, tool declarations). Billed at model input price $P_{\text{in}}$. |
-| `candidatesTokenCount` | `int64` | **Output / Candidate Tokens**: Generation tokens produced by the model across response candidates. Billed at model output price $P_{\text{out}}$. |
-| `cachedContentTokenCount` | `int64` | **Cached Context Tokens**: The subset of prompt tokens served from Gemini Context Caching. Billed at the discounted cache read rate $P_{\text{cached}}$ rather than full input price. |
-| `thoughtsTokenCount` | `int64` | **Reasoning / Thinking Tokens**: Internal reasoning/chain-of-thought tokens produced during inference (e.g. Gemini 3.8 Flash / Gemini 2.5 Pro). Billed under output token pricing. |
-| `totalTokenCount` | `int64` | **Total Token Volume**: Combined token sum for the inference call: $\text{totalTokenCount} = \text{promptTokenCount} + \text{candidatesTokenCount} + \text{thoughtsTokenCount}$ (e.g. $7200 + 1400 + 64 = 8664$; note that `cachedContentTokenCount` is a 256-token subset already included within the 7,200 `promptTokenCount`). |
-| `truncated` | `bool` | **Truncation Flag**: Indicates whether generation was truncated due to token limit (`max_output_tokens`) or safety cutoff. |
-
-### Granular Spend Calculation
-
-Using this telemetry, exact gross spend is determined without relying on arbitrary synthetic ratios:
-
-$$\text{Effective Input Tokens} = \max(0, \text{promptTokenCount} - \text{cachedContentTokenCount})$$
-$$\text{Cached Tokens} = \text{cachedContentTokenCount}$$
-$$\text{Output Tokens} = \text{candidatesTokenCount} + \text{thoughtsTokenCount}$$
-
-$$C_{\text{gross}} = \left( \frac{\text{Effective Input}}{1{,}000{,}000} \times P_{\text{in}} \right) + \left( \frac{\text{Cached}}{1{,}000{,}000} \times P_{\text{cached}} \right) + \left( \frac{\text{Output}}{1{,}000{,}000} \times P_{\text{out}} \right)$$
-
 > [!NOTE]  
-> If an older log record or summarized entry only provides `totalTokenCount` (with granular sub-counts missing or null), the system gracefully falls back to the per-model estimated ratios ($w_{\text{in}}, w_{\text{out}}, w_{\text{cached}}$) defined in the model pricing matrix.
+> **Current `MetadataLog` Emission & Automatic Granular Switchover**:  
+> `businessaicode.googleapis.com/metadata` currently populates `apiRequest.totalTokenCount` on inference events while leaving optional granular sub-counts (`promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, `thoughtsTokenCount`) unset (`0` / `null`).
+> * **Today (`totalTokenCount` emitted)**: Total token counts per developer and model are **exact**, while USD gross spend is estimated using each model's configured input/output/cached hinge-point ratios ($w_{\text{in}}, w_{\text{out}}, w_{\text{cached}}$) in [`config/model_pricing.json`](config/model_pricing.json).
+> * **Granular `RequestInfo` or Custom `.metadata` Views**: Whenever `promptTokenCount`, `candidatesTokenCount`, `cachedContentTokenCount`, or `thoughtsTokenCount` are populated on `apiRequest` (or exposed via a custom `.metadata` BigQuery view), [`app/core/cost_model.py`](app/core/cost_model.py) automatically switches to exact per-token-type pricing and `>200k` context-tier rates with zero configuration or code changes. Non-inference `MetadataLog` `oneof` events (such as `code_exposure`, `chat_exposure`, and `ai_characters_report`) are automatically excluded from inference request and token counts.
+
+### Telemetry Field Breakdown (`MetadataLog.api_request`)
+
+| Log Field | Type | Status in `MetadataLog` & Billing Mapping |
+| :--- | :---: | :--- |
+| `totalTokenCount` | `int64` | **Total Token Volume (Populated)**: Exact combined token sum for the API call. Priced via model blended hinge-point ratios when granular sub-counts are omitted. |
+| `promptTokenCount` | `int64` | **Input / Prompt Tokens (Optional `RequestInfo` field)**: Total input tokens submitted in the request (including any cached prefix). Billed at model input price $P_{\text{in}}$ (or $P_{\text{in, >200K}}$ when $>200\text{K}$) once populated. |
+| `candidatesTokenCount` | `int64` | **Output / Candidate Tokens (Optional `RequestInfo` field)**: Generation tokens produced across response candidates. Billed at model output price $P_{\text{out}}$ (or $P_{\text{out, >200K}}$). |
+| `cachedContentTokenCount` | `int64` | **Cached Context Tokens (Optional `RequestInfo` field)**: Subset of prompt tokens served from context caching. Billed at discounted cache read rate $P_{\text{cached}}$. |
+| `thoughtsTokenCount` | `int64` | **Reasoning / Thinking Tokens (Optional `RequestInfo` field)**: Internal reasoning tokens produced during inference. Billed under output token pricing. |
+
+### Spend Calculation Modes
+
+1. **Blended Hinge-Point Estimation (Default when only `totalTokenCount` is present)**:
+   $$R_{\text{blended}} = (w_{\text{in}} \cdot P_{\text{in}}) + (w_{\text{out}} \cdot P_{\text{out}}) + (w_{\text{cached}} \cdot P_{\text{cached}})$$
+   $$C_{\text{gross}} = \frac{\text{totalTokenCount}}{1{,}000{,}000} \times R_{\text{blended}}$$
+
+2. **Exact Granular & Context-Tiered Pricing (Automatic when granular sub-counts are present)**:
+   $$\text{Effective Input Tokens} = \max(0, \text{promptTokenCount} - \text{cachedContentTokenCount})$$
+   $$\text{Cached Tokens} = \text{cachedContentTokenCount}$$
+   $$\text{Output Tokens} = \text{candidatesTokenCount} + \text{thoughtsTokenCount}$$
+   $$C_{\text{gross}} = \left( \frac{\text{Effective Input}}{1{,}000{,}000} \times P_{\text{in}} \right) + \left( \frac{\text{Cached}}{1{,}000{,}000} \times P_{\text{cached}} \right) + \left( \frac{\text{Output}}{1{,}000{,}000} \times P_{\text{out}} \right)$$
+   *(Applies $>200\text{K}$ tier rates $P_{\text{in, >200K}}, P_{\text{out, >200K}}, P_{\text{cached, >200K}}$ automatically to requests with `promptTokenCount > 200000`.)*
 
 ### Sharded & Partitioned BigQuery Sink Tables
 
